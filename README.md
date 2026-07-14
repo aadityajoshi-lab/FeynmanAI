@@ -21,6 +21,7 @@ We don't need AI that teaches students better. We need AI that forces students t
 **Feynman AI** leverages the **Protégé Effect** — the well-established cognitive phenomenon that teaching others is one of the most effective ways to learn. Instead of tutoring the student, Feynman AI creates a classroom of AI students that the human user must teach. The classroom refuses to "understand" until the explanation is complete, logically consistent, transferable, and robust against misconceptions.
 
 **Traditional AI:** AI thinks → Human consumes.
+
 **Feynman AI:** Human thinks → AI verifies.
 
 > **One-sentence pitch:** Most AI education products answer questions for students. Feynman AI creates a classroom of AI students that users must teach — exposing misconceptions, measuring overconfidence, predicting forgetting, and intervening (up to and including a short AI-generated video) only when productive struggle turns unproductive.
@@ -29,92 +30,36 @@ We don't need AI that teaches students better. We need AI that forces students t
 
 ## 3. Core Learning Loop
 
-```
-Upload Material
-      |
-      v
-AI Builds Concept Dependency Graph
-      |
-      v
-Pre-Assessment Confidence Gauge
-      |
-      v
-Student Teaches AI Classroom  <------------------+
-      |                                          |
-      v                                          |
-AI Challenges Explanation (Novice/Skeptic/Extrapolator)
-      |                                          |
-      v                                          |
-Misconception Detected? --No--> Node Marked Mastered
-      |                                          |
-     Yes                                         |
-      v                                          |
-Adaptive Intervention Engine                     |
-(Hint -> Analogy -> Diagram -> Worked Example     |
-        -> AI-Generated Micro-Video)              |
-      |                                          |
-      +---------- Student Re-Teaches -------------+
-      |
-      v
-All Nodes Mastered --> Domain-Transfer Challenge
-      |
-      v
-Confidence-Mastery Gap Analysis + Forgetting Curve
+```mermaid
+flowchart TD
+    A[Upload Material] --> B[AI Builds Concept Dependency Graph]
+    B --> C[Pre-Assessment Confidence Gauge]
+    C --> D[Student Teaches AI Classroom]
+    D --> E{Misconception Detected?}
+    E -->|No| F[Node Marked Mastered]
+    E -->|Yes| G[Adaptive Intervention Engine]
+    G --> H["Hint → Analogy → Diagram → Worked Example → AI Micro-Video"]
+    H --> D
+    F --> I{All Nodes Mastered?}
+    I -->|No| D
+    I -->|Yes| J[Domain-Transfer Challenge]
+    J --> K[Confidence-Mastery Gap Analysis + Forgetting Curve]
 ```
 
 ---
 
 ## 4. End-to-End Architecture
 
-```
-       +---------------------------------------------+
-       |   Universal Ingestion (PDF / PPT / Notes)   |
-       +----------------------+----------------------+
-                              |
-                              v
-       +---------------------------------------------+
-       |     AI Concept Graph Generation (JSON)      |
-       +----------------------+----------------------+
-                              |
-                              v
-       +---------------------------------------------+
-       |   Pre-Assessment Self-Confidence Measure    |
-       +----------------------+----------------------+
-                              |
-                              v
-       +---------------------------------------------+
-       |    Multi-Agent Swarm (Interactive Class)    |
-       |  - The Novice (Jargon Trap)                 |
-       |  - The Skeptic (Logic Gaps)                 |
-       |  - The Extrapolator (Boundary Limits)       |
-       +----------------------+----------------------+
-                              |
-                              v
-       +---------------------------------------------+
-       |       Interactive Whiteboard (Canvas)       |
-       +----------------------+----------------------+
-                              |
-                              v
-       +---------------------------------------------+
-       |       Hidden Rubric Progress Evaluator      |
-       +----------------------+----------------------+
-                              |
-                              v
-       +---------------------------------------------+
-       |   Adaptive Intervention Engine (escalating) |
-       |   Hint > Analogy > Diagram > Worked Example |
-       |            > AI Micro-Video (30s)           |
-       +----------------------+----------------------+
-                              |
-                              v
-       +---------------------------------------------+
-       |          Domain-Transfer Challenge          |
-       +----------------------+----------------------+
-                              |
-                              v
-       +---------------------------------------------+
-       |  Confidence-Mastery Gap & Forgetting Curve  |
-       +---------------------------------------------+
+```mermaid
+flowchart TD
+    A["Universal Ingestion<br/>PDF / PPT / Notes"] --> B["AI Concept Graph Generation (JSON)"]
+    B --> C["Pre-Assessment Self-Confidence Measure"]
+    C --> D["Multi-Agent Swarm<br/>Novice · Skeptic · Extrapolator"]
+    D --> E["Interactive Whiteboard (Canvas)"]
+    E --> F["Hidden Rubric Progress Evaluator"]
+    F --> G["Adaptive Intervention Engine<br/>Hint → Analogy → Diagram → Worked Example → AI Micro-Video"]
+    G --> H["Domain-Transfer Challenge"]
+    H --> I["Confidence-Mastery Gap & Forgetting Curve"]
 ```
 
 ---
@@ -122,21 +67,28 @@ Confidence-Mastery Gap Analysis + Forgetting Curve
 ## 5. Feature Set
 
 ### Feature 1 — Universal Learning Ingestion & Concept Dependency Graph
+
 Accepts PDFs, PPT/PPTX, DOC/DOCX, research papers, lecture notes, handwritten notes, photos of textbooks, and syllabus documents. The system extracts concepts, formulas, examples, diagrams, and references, then structures them as a **directed acyclic graph (DAG)** where nodes are sub-concepts and edges are prerequisite relationships.
 
-Example:
-```
-Differential Equations → Laplace Transform → Transfer Function → Root Locus
+Example dependency chain:
+
+```mermaid
+flowchart LR
+    A[Differential Equations] --> B[Laplace Transform]
+    B --> C[Transfer Function]
+    C --> D[Root Locus]
 ```
 
 This graph becomes the hidden mastery model the student must teach back to the classroom.
 
 ### Feature 2 — Pre-Assessment Self-Confidence Gauge
+
 Before entering the classroom, the student is shown the generated syllabus and asked:
 *"On a scale of 0–100%, how well do you understand this topic?"*
 This establishes the baseline used later to measure the **illusion of competence**.
 
 ### Feature 3 — The Multi-Agent Swarm (AI Classroom)
+
 Three AI students with distinct cognitive profiles:
 
 | Agent | Emoji | Behavior |
@@ -146,9 +98,11 @@ Three AI students with distinct cognitive profiles:
 | **The Extrapolator** | 🧑‍🦱 Mr. Bright | Stretches the student's explanation to absurd logical extremes to test boundary conditions |
 
 ### Feature 4 — Interactive Multimodal Whiteboard
+
 A shared canvas (powered by Excalidraw) where the student can sketch structures, write equations, or drag in photos of handwritten work. Agents "read" the drawing via vision APIs and base their follow-up questions on both the spoken/typed transcript and the canvas layout.
 
 ### Feature 5 — Hidden Mastery Rubric
+
 The student sees a visual board of required concepts, each in one of three states:
 
 - `Unexplained` (Gray)
@@ -158,10 +112,12 @@ The student sees a visual board of required concepts, each in one of three state
 A node is only marked **mastered** once the student defines it, illustrates it, applies it in context, and defeats its associated misconception.
 
 ### Feature 6 — Adaptive Intervention Engine *(includes new video feature)*
+
 Feynman AI never hands over the answer. When a student is stuck or triggers a misconception, the platform escalates through a strict hierarchy — intervening only as much as necessary before demanding the student teach again:
 
-```
-Hint → Analogy → Diagram → Worked Example → 30-second AI-Generated Micro-Video
+```mermaid
+flowchart LR
+    A[Hint] --> B[Analogy] --> C[Diagram] --> D[Worked Example] --> E["30s AI-Generated Micro-Video"]
 ```
 
 - Each level is tried first; the system only escalates if the student is still stuck after re-attempting the explanation.
@@ -173,6 +129,7 @@ Hint → Analogy → Diagram → Worked Example → 30-second AI-Generated Micro
 - After any intervention (including the video), the loop does not end — the student must immediately re-teach the concept to the classroom. Mastery is only ever demonstrated through explanation, never by watching.
 
 ### Feature 7 — Domain-Transfer Challenge
+
 Once all rubric nodes are mastered, the Extrapolator issues a transfer problem that applies the concept to a novel context:
 
 > *"You explained how a PID controller works in cruise control. Now, how would the proportional and integral values change if we applied this system to keep a drone stable in turbulent crosswinds?"*
@@ -180,22 +137,26 @@ Once all rubric nodes are mastered, the Extrapolator issues a transfer problem t
 Successful transfer is used as evidence of genuine (non-illusory) understanding.
 
 ### Feature 8 — Confidence Calibration Engine / Illusion of Competence Analysis
+
 The final dashboard compares the student's initial confidence score against actual rubric mastery:
 
-```
-Confidence: 92%
-Mastery:    61%
-Calibration Score: 66%
-```
+| Metric | Score |
+|---|---|
+| Confidence | 92% |
+| Mastery | 61% |
+| **Calibration Score** | **66%** |
 
 This exposes the gap and pinpoints the exact misconceptions surfaced during the session.
 
 ### Feature 9 — Ebbinghaus Forgetting Curve Prediction
+
 The system tracks teaching efficacy (hesitations, wrong statements, misconceptions triggered, and how much intervention support — including video — was required) and predicts retention decay:
 
-$$R(t) = e^{-\frac{t}{S}}$$
+```
+R(t) = e^(-t / S)
+```
 
-Where $S$ is a memory strength score computed from session dynamics (see §7). The platform automatically schedules review sessions once predicted retention drops below 50%.
+Where `S` is a memory strength score computed from session dynamics (see §8). The platform automatically schedules review sessions once predicted retention drops below 50%.
 
 ---
 
@@ -265,9 +226,11 @@ export interface AppState {
 ## 7. API Spec & Prompt Engineering
 
 ### `POST /api/ingest`
+
 **Payload:** form data containing file upload (PDF/PPTX/PNG).
 
 **Response:**
+
 ```json
 {
   "topic": "State Space Control",
@@ -291,7 +254,9 @@ export interface AppState {
 ```
 
 ### `POST /api/orchestrate`
+
 **Payload:**
+
 ```json
 {
   "transcript": "Let's look at the eigenvalues of matrix A. If they lie in the left half plane...",
@@ -301,6 +266,7 @@ export interface AppState {
 ```
 
 **System Prompt for the Orchestrator:**
+
 ```text
 You are the Cognitive Orchestrator for Feynman AI.
 Review the human teacher's transcript and their whiteboard image (which contains diagrams/equations).
@@ -326,10 +292,12 @@ Output ONLY JSON:
 }
 ```
 
-### `POST /api/intervention`  — *new endpoint powering the video feature*
+### `POST /api/intervention` — *new endpoint powering the video feature*
+
 Called whenever the orchestrator returns `"nextAction": "intervene"`. Generates the appropriate support asset for the stuck concept, escalating to a short AI-generated video only at the top of the hierarchy.
 
 **Payload:**
+
 ```json
 {
   "nodeId": "eigenvalues",
@@ -340,6 +308,7 @@ Called whenever the orchestrator returns `"nextAction": "intervene"`. Generates 
 ```
 
 **Response:**
+
 ```json
 {
   "nodeId": "eigenvalues",
@@ -354,6 +323,7 @@ Called whenever the orchestrator returns `"nextAction": "intervene"`. Generates 
 ```
 
 **System prompt for the video-generation step:**
+
 ```text
 You are the Intervention Content Generator for Feynman AI.
 You have been called because the student has already tried a hint, an analogy, a diagram,
@@ -379,23 +349,28 @@ Output ONLY JSON:
 
 ## 8. Ebbinghaus Memory Retention Math
 
-Memory strength $S$ is calculated dynamically from student errors and how much intervention support was required (including whether a micro-video was needed):
+Memory strength `S` is calculated dynamically from student errors and how much intervention support was required (including whether a micro-video was needed):
 
-$$S = \text{base\_strength} \times \left(1 - \frac{\text{misconceptions\_triggered}}{\text{total\_nodes}}\right) \times \left(\frac{\text{final\_score}}{100}\right) \times \left(1 - \frac{\text{micro\_videos\_used}}{\text{total\_nodes}} \times 0.5\right)$$
+```
+S = base_strength
+    × (1 − misconceptions_triggered / total_nodes)
+    × (final_score / 100)
+    × (1 − (micro_videos_used / total_nodes) × 0.5)
+```
 
-Concepts that required a micro-video intervention are weighted as more fragile, since reaching the top of the intervention hierarchy indicates the student needed the most external support before re-teaching successfully. This value feeds the decay model to predict how many days the student has before forgetting the topic, plotted as a visual decay curve on the dashboard.
+Concepts that required a micro-video intervention are weighted as more fragile, since reaching the top of the intervention hierarchy indicates the student needed the most external support before re-teaching successfully. This value feeds the decay model (`R(t) = e^(-t/S)`) to predict how many days the student has before forgetting the topic, plotted as a visual decay curve on the dashboard.
 
 ---
 
 ## 9. Implementation Plan Checkpoints
 
-- **Checkpoint 1:** PDF/Image upload parsing to generate JSON dependency graphs.
-- **Checkpoint 2:** Excalidraw integration and Base64 whiteboard change tracking.
-- **Checkpoint 3:** Realtime agent state changes (Zustand) triggered by backend orchestration logic.
-- **Checkpoint 4:** Adaptive Intervention Engine — hint/analogy/diagram/worked-example tiers, with escalation logic and re-teach enforcement.
-- **Checkpoint 5:** AI-generated micro-video intervention — `/api/intervention` video pipeline, storage/CDN delivery, and mandatory re-teach step after playback.
-- **Checkpoint 6:** Transfer test phase transitions and visual confidence-mastery gap analytics.
-- **Checkpoint 7:** Ebbinghaus forgetting-curve dashboard and automated review scheduling.
+- [ ] **Checkpoint 1:** PDF/Image upload parsing to generate JSON dependency graphs.
+- [ ] **Checkpoint 2:** Excalidraw integration and Base64 whiteboard change tracking.
+- [ ] **Checkpoint 3:** Realtime agent state changes (Zustand) triggered by backend orchestration logic.
+- [ ] **Checkpoint 4:** Adaptive Intervention Engine — hint/analogy/diagram/worked-example tiers, with escalation logic and re-teach enforcement.
+- [ ] **Checkpoint 5:** AI-generated micro-video intervention — `/api/intervention` video pipeline, storage/CDN delivery, and mandatory re-teach step after playback.
+- [ ] **Checkpoint 6:** Transfer test phase transitions and visual confidence-mastery gap analytics.
+- [ ] **Checkpoint 7:** Ebbinghaus forgetting-curve dashboard and automated review scheduling.
 
 ---
 
@@ -406,5 +381,3 @@ Concepts that required a micro-video intervention are weighted as more fragile, 
 - **Orchestration:** LLM-driven cognitive orchestrator (multimodal: transcript + whiteboard image).
 - **Intervention media:** Escalating text/diagram generation, culminating in short AI-generated video clips for the highest-support tier.
 - **Analytics:** Confidence-mastery gap scoring, Ebbinghaus-based forgetting curve, automated review scheduling.
-#   F e y n m a n - A I  
- 
