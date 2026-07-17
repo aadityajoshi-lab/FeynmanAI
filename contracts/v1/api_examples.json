@@ -1,0 +1,72 @@
+{
+  "schemaVersion": "contracts/v1",
+  "examples": {
+    "getLesson": {
+      "request": { "method": "GET", "path": "/api/v1/lessons/photosynthesis" },
+      "response": {
+        "status": 200,
+        "body": {
+          "lessonId": "photosynthesis",
+          "title": "Where does a plant's mass come from?",
+          "prompt": "Teach back where most of a plant's dry mass comes from and how photosynthesis makes that possible.",
+          "sourcePackId": "photosynthesis-v1",
+          "learningGoal": "Distinguish matter inputs from energy inputs in photosynthesis.",
+          "estimatedMinutes": 8,
+          "constraints": ["Use the approved source spans", "Separate matter from energy"]
+        }
+      }
+    },
+    "createSession": {
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/sessions",
+        "body": { "lessonId": "photosynthesis", "learnerText": "Plants get most of their mass from soil minerals and sunlight.", "clientRequestId": "demo-session-001" }
+      },
+      "response": {
+        "status": 201,
+        "body": { "sessionId": "sess_demo0001", "recordId": "rec_demo0001", "recordVersion": 1, "state": "draft", "providerMode": "codex_fixture" }
+      }
+    },
+    "audit": {
+      "request": { "method": "POST", "path": "/api/v1/sessions/sess_demo0001/audit", "body": { "recordVersion": 1, "clientRequestId": "audit-demo-001" } },
+      "response": { "status": 200, "bodyFile": "fixtures/audit_record_v1.json" }
+    },
+    "getRecord": {
+      "request": { "method": "GET", "path": "/api/v1/sessions/sess_demo0001/record" },
+      "response": { "status": 200, "bodyFile": "fixtures/audit_record_v1.json" }
+    },
+    "clarification": {
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/sessions/sess_demo0001/claims/claim-soil-mass/clarifications",
+        "body": { "question": "Does soil make most of the plant's dry mass?", "recordVersion": 1 }
+      },
+      "response": { "status": 200, "bodyFile": "fixtures/clarification_answered.json" }
+    },
+    "revision": {
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/sessions/sess_demo0001/claims/claim-soil-mass/revisions",
+        "body": { "learnerRepair": "Carbon dioxide in air supplies much of a plant's carbon; soil minerals are essential but small in mass.", "expectedVersion": 1, "clientRequestId": "revision-demo-001" }
+      },
+      "response": { "status": 200, "bodyFile": "fixtures/revision_updated.json" }
+    },
+    "staleRevision": {
+      "request": {
+        "method": "POST",
+        "path": "/api/v1/sessions/sess_demo0001/claims/claim-soil-mass/revisions",
+        "body": { "learnerRepair": "Carbon dioxide supplies carbon.", "expectedVersion": 1 }
+      },
+      "response": { "status": 409, "body": { "errorCode": "stale_record_version", "message": "Evidence Record changed; reload before revising." } }
+    },
+    "inspection": {
+      "request": { "method": "GET", "path": "/api/v1/sessions/sess_demo0001/inspection" },
+      "response": { "status": 200, "body": { "sessionId": "sess_demo0001", "sourcePackId": "photosynthesis-v1", "providerMode": "codex_fixture", "auditCount": 1, "revisionCount": 0, "humanReviewRequired": false } }
+    }
+  },
+  "errorShapes": {
+    "invalidInput": { "errorCode": "invalid_input", "message": "learnerText must be 1-12000 characters", "field": "learnerText" },
+    "unknownClaim": { "errorCode": "unknown_claim", "message": "Claim is not part of this Evidence Record." },
+    "humanReview": { "errorCode": "invalid_output", "message": "The provider response could not be safely verified.", "providerMode": "human_review" }
+  }
+}

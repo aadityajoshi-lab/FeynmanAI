@@ -1,0 +1,10 @@
+{
+  "sessionId": "sess_demo0001",
+  "claimId": "claim-soil-mass",
+  "recordVersion": 1,
+  "providerMode": "codex_fixture",
+  "state": "abstained",
+  "question": "Which fertilizer brand should I buy?",
+  "sourceAnchorIds": [],
+  "reasonCode": "outside_source_pack"
+}

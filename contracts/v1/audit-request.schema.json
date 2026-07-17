@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://feynman-ai.local/contracts/v1/audit-request.schema.json",
+  "title": "Audit request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["recordVersion"],
+  "properties": {
+    "recordVersion": { "$ref": "common.schema.json#/$defs/recordVersion" },
+    "clientRequestId": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{8,100}$" }
+  }
+}

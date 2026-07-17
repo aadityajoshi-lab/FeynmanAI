@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://feynman-ai.local/contracts/v1/create-session.schema.json",
+  "title": "Create learning session request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["lessonId", "learnerText", "clientRequestId"],
+  "properties": {
+    "lessonId": { "const": "photosynthesis" },
+    "learnerText": { "type": "string", "minLength": 1, "maxLength": 12000 },
+    "clientRequestId": { "type": "string", "pattern": "^[A-Za-z0-9._:-]{8,100}$" }
+  }
+}

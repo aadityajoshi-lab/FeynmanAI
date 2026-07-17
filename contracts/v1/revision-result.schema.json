@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://feynman-ai.local/contracts/v1/revision-result.schema.json",
+  "title": "Claim revision result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sessionId", "claimId", "revisionId", "recordVersion", "providerMode", "state", "before", "after", "crossClaimRecheck", "record"],
+  "properties": {
+    "sessionId": { "$ref": "common.schema.json#/$defs/sessionId" },
+    "claimId": { "$ref": "common.schema.json#/$defs/claimId" },
+    "revisionId": { "type": "string", "pattern": "^rev_[A-Za-z0-9_-]{8,64}$" },
+    "recordVersion": { "$ref": "common.schema.json#/$defs/recordVersion" },
+    "providerMode": { "$ref": "common.schema.json#/$defs/providerMode" },
+    "state": { "$ref": "common.schema.json#/$defs/revisionState" },
+    "before": { "type": "string", "minLength": 1 },
+    "after": { "type": "string", "minLength": 1 },
+    "crossClaimRecheck": { "type": "boolean" },
+    "warnings": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "record": { "$ref": "evidence-record.schema.json" }
+  }
+}

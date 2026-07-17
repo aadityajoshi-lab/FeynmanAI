@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://feynman.local/contracts/v3/question-bank.schema.json",
+  "title": "Feynman Approved Question",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["questionId", "conceptId", "stem", "answerType", "difficulty", "sourceAnchorIds", "approvalStatus"],
+  "properties": {
+    "questionId": { "type": "string", "maxLength": 120 },
+    "conceptId": { "type": "string", "maxLength": 120 },
+    "stem": { "type": "string", "minLength": 1, "maxLength": 1200 },
+    "answerType": { "type": "string", "enum": ["choice", "short_answer", "numeric", "explain"] },
+    "difficulty": { "type": "string", "enum": ["foundation", "medium", "exam"] },
+    "options": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 300 } },
+    "answer": { "type": ["string", "number", "integer", "null"] },
+    "rubric": { "type": "array", "maxItems": 8, "items": { "type": "string", "maxLength": 300 } },
+    "misconceptionTarget": { "type": ["string", "null"], "maxLength": 120 },
+    "sourceAnchorIds": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "type": "string" } },
+    "approvalStatus": { "type": "string", "enum": ["draft", "review_required", "approved", "published"] },
+    "questionVersion": { "type": "integer", "minimum": 1 }
+  }
+}

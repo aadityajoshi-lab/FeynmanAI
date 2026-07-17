@@ -1,0 +1,119 @@
+{
+  "schemaVersion": "contracts/v1",
+  "lessonId": "photosynthesis",
+  "sourcePackId": "photosynthesis-v1",
+  "cases": [
+    {
+      "caseId": "eval-01-supported-matter-energy",
+      "name": "Correct matter versus energy explanation",
+      "kind": "audit",
+      "input": { "learnerText": "Most plant dry mass comes from carbon dioxide and water. Light supplies energy, not the mass." },
+      "expected": { "httpStatus": 200, "state": "ready", "containsVerdicts": ["supported"], "allAnchorsApproved": true }
+    },
+    {
+      "caseId": "eval-02-soil-mass-misconception",
+      "name": "Soil is claimed as the main mass source",
+      "kind": "audit",
+      "input": { "learnerText": "A plant gets most of its mass by eating minerals from the soil." },
+      "expected": { "httpStatus": 200, "state": "ready", "verdict": "misconception", "misconceptionType": "source_of_matter", "requiresAnchor": "photosynthesis-v1-span-06" }
+    },
+    {
+      "caseId": "eval-03-sunlight-mass-misconception",
+      "name": "Sunlight is claimed as biomass",
+      "kind": "audit",
+      "input": { "learnerText": "Plants turn sunlight directly into the atoms that make their dry mass." },
+      "expected": { "httpStatus": 200, "state": "ready", "verdict": "misconception", "misconceptionType": "source_of_matter", "requiresAnchor": "photosynthesis-v1-span-04" }
+    },
+    {
+      "caseId": "eval-04-water-dismissed",
+      "name": "Water is dismissed as irrelevant",
+      "kind": "audit",
+      "input": { "learnerText": "Only carbon dioxide matters; water is not part of the material used to make sugars." },
+      "expected": { "httpStatus": 200, "state": "ready", "verdict": "misconception", "misconceptionType": "source_of_matter", "requiresAnchor": "photosynthesis-v1-span-03" }
+    },
+    {
+      "caseId": "eval-05-carbon-energy-confusion",
+      "name": "Carbon dioxide is called energy",
+      "kind": "audit",
+      "input": { "learnerText": "Carbon dioxide is the energy source that powers photosynthesis." },
+      "expected": { "httpStatus": 200, "state": "ready", "verdict": "misconception", "misconceptionType": "causal_mechanism", "requiresAnchor": "photosynthesis-v1-span-08" }
+    },
+    {
+      "caseId": "eval-06-vague-soil-claim",
+      "name": "Vague explanation needs precision",
+      "kind": "audit",
+      "input": { "learnerText": "Plants get what they need from the ground and the sun." },
+      "expected": { "httpStatus": 200, "state": "ready", "verdict": "needs_precision", "requiresAnchor": "photosynthesis-v1-span-08" }
+    },
+    {
+      "caseId": "eval-07-empty-teachback",
+      "name": "Empty teach-back is rejected",
+      "kind": "validation",
+      "input": { "learnerText": "" },
+      "expected": { "httpStatus": 422, "errorCode": "invalid_input" }
+    },
+    {
+      "caseId": "eval-08-oversized-teachback",
+      "name": "Oversized teach-back is rejected",
+      "kind": "validation",
+      "input": { "learnerTextLength": 12001 },
+      "expected": { "httpStatus": 422, "errorCode": "invalid_input" }
+    },
+    {
+      "caseId": "eval-09-unknown-anchor",
+      "name": "Provider output with unknown source anchor",
+      "kind": "validator",
+      "input": { "sourceAnchorIds": ["photosynthesis-v1-span-99"] },
+      "expected": { "httpStatus": 200, "state": "needs_human_review", "errorCode": "invalid_source_anchor" }
+    },
+    {
+      "caseId": "eval-10-malformed-provider-output",
+      "name": "Malformed structured output",
+      "kind": "provider_failure",
+      "input": { "providerOutput": { "claims": "not-an-array" } },
+      "expected": { "httpStatus": 200, "state": "needs_human_review", "errorCode": "invalid_output" }
+    },
+    {
+      "caseId": "eval-11-clarification-answered",
+      "name": "In-scope question receives anchored answer",
+      "kind": "clarification",
+      "input": { "claimId": "claim-soil-mass", "question": "Does soil make most of the plant's dry mass?", "recordVersion": 1 },
+      "expected": { "httpStatus": 200, "state": "answered", "recordVersionUnchanged": true, "requiresAnchor": "photosynthesis-v1-span-06" }
+    },
+    {
+      "caseId": "eval-12-clarification-abstains",
+      "name": "Out-of-pack question abstains",
+      "kind": "clarification",
+      "input": { "claimId": "claim-soil-mass", "question": "Which fertilizer brand should I buy?", "recordVersion": 1 },
+      "expected": { "httpStatus": 200, "state": "abstained", "reasonCode": "outside_source_pack", "recordVersionUnchanged": true }
+    },
+    {
+      "caseId": "eval-13-selected-claim-revision",
+      "name": "Revision changes selected claim only",
+      "kind": "revision",
+      "input": { "claimId": "claim-soil-mass", "learnerRepair": "Carbon dioxide in air supplies much of a plant's carbon; soil minerals are essential but small in mass.", "expectedVersion": 1 },
+      "expected": { "httpStatus": 200, "state": "updated", "recordVersion": 2, "crossClaimRecheck": false, "neighboringClaimsUnchanged": true }
+    },
+    {
+      "caseId": "eval-14-cross-claim-warning",
+      "name": "Revision flags possible neighboring impact",
+      "kind": "revision",
+      "input": { "claimId": "claim-light-mass", "learnerRepair": "Light provides energy while carbon dioxide and water provide matter.", "expectedVersion": 1 },
+      "expected": { "httpStatus": 200, "state": "updated", "recordVersion": 2, "crossClaimRecheck": true, "warningRequired": "cross_claim_recheck" }
+    },
+    {
+      "caseId": "eval-15-stale-revision",
+      "name": "Stale record version is rejected",
+      "kind": "concurrency",
+      "input": { "claimId": "claim-soil-mass", "learnerRepair": "Carbon dioxide supplies much of the carbon.", "expectedVersion": 1, "currentVersion": 2 },
+      "expected": { "httpStatus": 409, "errorCode": "stale_record_version" }
+    },
+    {
+      "caseId": "eval-16-duplicate-session-request",
+      "name": "Duplicate client request is idempotent",
+      "kind": "idempotency",
+      "input": { "clientRequestId": "demo-session-001", "repeat": true },
+      "expected": { "firstHttpStatus": 201, "repeatHttpStatus": 200, "sameSessionId": true }
+    }
+  ]
+}

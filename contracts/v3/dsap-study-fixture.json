@@ -1,0 +1,20 @@
+{
+  "studyPlanId": "dsap-sampling-fixture-v1",
+  "sourceIds": ["dsap-sampling-v1"],
+  "chapterSelection": "chapter_1",
+  "providerMode": "codex_fixture",
+  "sourcePackVersion": "dsap-sampling-v1",
+  "recordVersion": 1,
+  "outline": [
+    { "conceptId": "sampling-frequency", "title": "Sampling frequency", "objective": "Relate sample spacing to Fs and Ts.", "sourceAnchorIds": ["dsap-sampling-v1-span-01"] },
+    { "conceptId": "nyquist-condition", "title": "Nyquist condition", "objective": "Predict when a sampled signal can be reconstructed without aliasing.", "sourceAnchorIds": ["dsap-sampling-v1-span-02"] },
+    { "conceptId": "alias-frequency", "title": "Alias frequency", "objective": "Explain why frequencies separated by Fs can produce the same samples.", "sourceAnchorIds": ["dsap-sampling-v1-span-03", "dsap-sampling-v1-span-04"] }
+  ],
+  "scenes": [
+    { "sceneId": "sampling-whiteboard", "conceptId": "sampling-frequency", "type": "whiteboard", "title": "From continuous trace to samples", "sourceAnchorIds": ["dsap-sampling-v1-span-01"], "actions": [{ "actionId": "wb-01", "kind": "write", "label": "Fs = 1/Ts", "payload": { "x": 220, "y": 120 } }, { "actionId": "wb-02", "kind": "draw", "label": "sample points", "payload": { "shape": "points", "count": 12 } }, { "actionId": "wb-03", "kind": "spotlight", "label": "Notice the spacing", "payload": { "target": "sample-spacing" } }] },
+    { "sceneId": "sampling-playground", "conceptId": "alias-frequency", "type": "two_d", "title": "Catch the alias", "sourceAnchorIds": ["dsap-sampling-v1-span-03", "dsap-sampling-v1-span-04"], "config": { "kind": "signal_sampling", "frequencyHz": 400, "sampleRateHz": 1200, "minSampleRateHz": 400, "maxSampleRateHz": 2400 } },
+    { "sceneId": "sampling-predict", "conceptId": "nyquist-condition", "type": "predict_checkpoint", "title": "Predict before reveal", "sourceAnchorIds": ["dsap-sampling-v1-span-02"] },
+    { "sceneId": "sampling-teach-back", "conceptId": "alias-frequency", "type": "teach_back", "title": "Teach the alias to a peer", "sourceAnchorIds": ["dsap-sampling-v1-span-03", "dsap-sampling-v1-span-04"] },
+    { "sceneId": "sampling-exam", "conceptId": "alias-frequency", "type": "exam_bridge", "title": "Exam bridge: Fs = 40 Hz", "sourceAnchorIds": ["dsap-sampling-v1-span-04", "dsap-sampling-v1-span-06"] }
+  ]
+}

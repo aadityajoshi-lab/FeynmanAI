@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+backend/.env
+backend/db.sqlite3
+.pytest_cache/
+.ruff_cache/
+
+# Node / Next
+frontend/node_modules/
+frontend/.next/
+frontend/.next*/
+frontend/out/
+frontend/.env.local
+frontend/npm-debug.log*
+frontend/tsconfig.tsbuildinfo
+
+# Local source-audit clones and extracted authoring assets
+tmp/
+inputs/
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# OS / tooling
+.DS_Store
+Thumbs.db
+*.log
+
+# Local browser verification captures (not source assets)
+artifacts-*.png
+artifacts-*.jpg

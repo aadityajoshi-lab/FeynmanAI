@@ -1,0 +1,10 @@
+{
+  "sessionId": "sess_demo0001",
+  "claimId": "claim-soil-mass",
+  "recordVersion": 1,
+  "providerMode": "codex_fixture",
+  "state": "answered",
+  "question": "Does soil make most of the plant's dry mass?",
+  "answer": "No. Soil minerals are essential but make up only a small fraction of most plant dry mass. Carbon in sugars is fixed from carbon dioxide in air.",
+  "sourceAnchorIds": ["photosynthesis-v1-span-05", "photosynthesis-v1-span-06"]
+}

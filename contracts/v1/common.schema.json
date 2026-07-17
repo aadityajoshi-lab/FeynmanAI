@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://feynman-ai.local/contracts/v1/common.schema.json",
+  "title": "Feynman AI common contract definitions",
+  "$defs": {
+    "providerMode": {
+      "type": "string",
+      "enum": ["codex_fixture", "live_openai", "human_review"]
+    },
+    "verdict": {
+      "type": "string",
+      "enum": ["supported", "misconception", "needs_precision", "needs_human_review"]
+    },
+    "misconceptionType": {
+      "type": "string",
+      "enum": ["source_of_matter", "causal_mechanism", "terminology"]
+    },
+    "sessionState": {
+      "type": "string",
+      "enum": ["draft", "auditing", "ready", "needs_human_review"]
+    },
+    "clarificationState": {
+      "type": "string",
+      "enum": ["idle", "pending", "answered", "abstained", "needs_human_review"]
+    },
+    "revisionState": {
+      "type": "string",
+      "enum": ["editing", "reauditing", "updated", "needs_human_review"]
+    },
+    "claimId": {
+      "type": "string",
+      "pattern": "^claim-[a-z0-9-]+$",
+      "minLength": 7,
+      "maxLength": 80
+    },
+    "sourceAnchorId": {
+      "type": "string",
+      "pattern": "^photosynthesis-v1-span-[0-9]{2}$"
+    },
+    "sourcePackId": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "sessionId": {
+      "type": "string",
+      "pattern": "^sess_[A-Za-z0-9_-]{8,64}$"
+    },
+    "recordVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "dateTime": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

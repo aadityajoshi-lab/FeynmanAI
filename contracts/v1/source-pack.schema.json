@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://feynman-ai.local/contracts/v1/source-pack.schema.json",
+  "title": "Approved source pack",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sourcePackId", "lessonId", "version", "title", "license", "spans", "packChecksum"],
+  "properties": {
+    "sourcePackId": { "const": "photosynthesis-v1" },
+    "lessonId": { "const": "photosynthesis" },
+    "version": { "type": "integer", "const": 1 },
+    "title": { "type": "string", "const": "Where does a plant's mass come from?" },
+    "topic": { "type": "string", "const": "photosynthesis" },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "holder", "notice"],
+      "properties": {
+        "name": { "const": "CC BY 4.0" },
+        "holder": { "type": "string", "const": "Feynman AI project" },
+        "notice": { "type": "string", "minLength": 1 }
+      }
+    },
+    "sourceDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "version", "checksum"],
+      "properties": {
+        "path": { "const": "docs/source-packs/photosynthesis-v1.md" },
+        "version": { "const": 1 },
+        "checksum": { "$ref": "common.schema.json#/$defs/sha256" }
+      }
+    },
+    "approvedBy": { "type": "string", "minLength": 1 },
+    "approvedAt": { "$ref": "common.schema.json#/$defs/dateTime" },
+    "spans": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["spanId", "section", "text", "checksum", "sourceRef"],
+        "properties": {
+          "spanId": { "$ref": "common.schema.json#/$defs/sourceAnchorId" },
+          "section": { "type": "string", "minLength": 1 },
+          "text": { "type": "string", "minLength": 20 },
+          "checksum": { "$ref": "common.schema.json#/$defs/sha256" },
+          "sourceRef": { "type": "string", "pattern": "^docs/source-packs/photosynthesis-v1\\.md#span-[0-9]{2}$" },
+          "timestampSeconds": { "type": "null" }
+        }
+      }
+    },
+    "packChecksum": { "$ref": "common.schema.json#/$defs/sha256" }
+  }
+}

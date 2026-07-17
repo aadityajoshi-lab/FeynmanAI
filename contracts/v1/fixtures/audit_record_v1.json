@@ -1,0 +1,42 @@
+{
+  "recordId": "rec_demo0001",
+  "sessionId": "sess_demo0001",
+  "lessonId": "photosynthesis",
+  "sourcePackId": "photosynthesis-v1",
+  "recordVersion": 1,
+  "providerMode": "codex_fixture",
+  "state": "ready",
+  "learnerText": "Plants get most of their mass from soil minerals. Sunlight becomes the plant's mass, and water is not important.",
+  "claims": [
+    {
+      "claimId": "claim-soil-mass",
+      "learnerText": "Plants get most of their mass from soil minerals.",
+      "verdict": "misconception",
+      "misconceptionType": "source_of_matter",
+      "probe": "What evidence would distinguish a small mineral input from the main source of dry mass?",
+      "sourceAnchorIds": ["photosynthesis-v1-span-05", "photosynthesis-v1-span-06"],
+      "revisionCount": 0
+    },
+    {
+      "claimId": "claim-light-mass",
+      "learnerText": "Sunlight becomes the plant's mass.",
+      "verdict": "misconception",
+      "misconceptionType": "source_of_matter",
+      "probe": "Is light supplying atoms or supplying the energy for a transformation?",
+      "sourceAnchorIds": ["photosynthesis-v1-span-04", "photosynthesis-v1-span-08"],
+      "revisionCount": 0
+    },
+    {
+      "claimId": "claim-water-unimportant",
+      "learnerText": "Water is not important.",
+      "verdict": "needs_precision",
+      "probe": "Which atoms does water supply, and what role does water play in making sugars?",
+      "sourceAnchorIds": ["photosynthesis-v1-span-03", "photosynthesis-v1-span-07"],
+      "revisionCount": 0
+    }
+  ],
+  "artifact": { "status": "draft", "title": "My photosynthesis teach-back" },
+  "warnings": [],
+  "createdAt": "2026-07-17T00:00:00Z",
+  "updatedAt": "2026-07-17T00:00:00Z"
+}

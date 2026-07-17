@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://feynman-ai.local/contracts/v1/lesson.schema.json",
+  "title": "Lesson summary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["lessonId", "title", "prompt", "sourcePackId", "learningGoal", "estimatedMinutes"],
+  "properties": {
+    "lessonId": { "const": "photosynthesis" },
+    "title": { "const": "Where does a plant's mass come from?" },
+    "prompt": { "type": "string", "const": "Teach back where most of a plant's dry mass comes from and how photosynthesis makes that possible." },
+    "sourcePackId": { "const": "photosynthesis-v1" },
+    "learningGoal": { "type": "string", "const": "Distinguish matter inputs from energy inputs in photosynthesis." },
+    "estimatedMinutes": { "type": "integer", "minimum": 1, "maximum": 60, "const": 8 },
+    "constraints": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

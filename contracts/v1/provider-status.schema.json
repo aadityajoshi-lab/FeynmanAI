@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://feynman-ai.local/contracts/v1/provider-status.schema.json",
+  "title": "LLM provider health",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["providerMode", "available", "schemaVersion"],
+  "properties": {
+    "providerMode": { "$ref": "common.schema.json#/$defs/providerMode" },
+    "available": { "type": "boolean" },
+    "model": { "type": "string", "minLength": 1 },
+    "schemaVersion": { "const": "contracts/v1" },
+    "message": { "type": "string" }
+  }
+}

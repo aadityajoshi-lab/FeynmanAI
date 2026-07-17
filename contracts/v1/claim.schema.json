@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://feynman-ai.local/contracts/v1/claim.schema.json",
+  "title": "Claim in an Evidence Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["claimId", "learnerText", "verdict", "probe", "sourceAnchorIds", "revisionCount"],
+  "properties": {
+    "claimId": { "$ref": "common.schema.json#/$defs/claimId" },
+    "learnerText": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "verdict": { "$ref": "common.schema.json#/$defs/verdict" },
+    "misconceptionType": { "$ref": "common.schema.json#/$defs/misconceptionType" },
+    "probe": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "sourceAnchorIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "common.schema.json#/$defs/sourceAnchorId" }
+    },
+    "revisionCount": { "type": "integer", "minimum": 0 },
+    "lastRevisionId": { "type": "string", "pattern": "^rev_[A-Za-z0-9_-]{8,64}$" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "verdict": { "enum": ["supported", "misconception", "needs_precision"] } } },
+      "then": { "properties": { "sourceAnchorIds": { "minItems": 1 } } }
+    },
+    {
+      "if": { "properties": { "verdict": { "const": "misconception" } } },
+      "then": { "required": ["misconceptionType"] }
+    }
+  ]
+}

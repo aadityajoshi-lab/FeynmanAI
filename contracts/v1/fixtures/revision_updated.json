@@ -1,0 +1,54 @@
+{
+  "sessionId": "sess_demo0001",
+  "claimId": "claim-soil-mass",
+  "revisionId": "rev_demo0001",
+  "recordVersion": 2,
+  "providerMode": "codex_fixture",
+  "state": "updated",
+  "before": "Plants get most of their mass from soil minerals.",
+  "after": "Carbon dioxide in air supplies much of a plant's carbon; soil minerals are essential but small in mass.",
+  "crossClaimRecheck": false,
+  "warnings": [],
+  "record": {
+    "recordId": "rec_demo0001",
+    "sessionId": "sess_demo0001",
+    "lessonId": "photosynthesis",
+    "sourcePackId": "photosynthesis-v1",
+    "recordVersion": 2,
+    "providerMode": "codex_fixture",
+    "state": "ready",
+    "learnerText": "Carbon dioxide in air supplies much of a plant's carbon; soil minerals are essential but small in mass. Sunlight becomes the plant's mass, and water is not important.",
+    "claims": [
+      {
+        "claimId": "claim-soil-mass",
+        "learnerText": "Carbon dioxide in air supplies much of a plant's carbon; soil minerals are essential but small in mass.",
+        "verdict": "supported",
+        "probe": "How would you explain the role of water alongside carbon dioxide?",
+        "sourceAnchorIds": ["photosynthesis-v1-span-05", "photosynthesis-v1-span-06"],
+        "revisionCount": 1,
+        "lastRevisionId": "rev_demo0001"
+      },
+      {
+        "claimId": "claim-light-mass",
+        "learnerText": "Sunlight becomes the plant's mass.",
+        "verdict": "misconception",
+        "misconceptionType": "source_of_matter",
+        "probe": "Is light supplying atoms or supplying the energy for a transformation?",
+        "sourceAnchorIds": ["photosynthesis-v1-span-04", "photosynthesis-v1-span-08"],
+        "revisionCount": 0
+      },
+      {
+        "claimId": "claim-water-unimportant",
+        "learnerText": "Water is not important.",
+        "verdict": "needs_precision",
+        "probe": "Which atoms does water supply, and what role does water play in making sugars?",
+        "sourceAnchorIds": ["photosynthesis-v1-span-03", "photosynthesis-v1-span-07"],
+        "revisionCount": 0
+      }
+    ],
+    "artifact": { "status": "ready_to_ship", "title": "My photosynthesis teach-back" },
+    "warnings": [],
+    "createdAt": "2026-07-17T00:00:00Z",
+    "updatedAt": "2026-07-17T00:01:00Z"
+  }
+}

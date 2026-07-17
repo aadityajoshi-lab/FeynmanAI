@@ -1,0 +1,22 @@
+{
+  "subjectId": "dsap",
+  "moduleId": "sampling-aliasing",
+  "cases": [
+    { "caseId": "dsap-supported-01", "kind": "supported", "response": "Sampling faster than twice the highest signal frequency avoids aliasing under the stated assumptions.", "expectedStatus": "supported", "sourceAnchorIds": ["dsap-sampling-v1-span-02"] },
+    { "caseId": "dsap-supported-02", "kind": "supported", "response": "At Fs=40 Hz, 10 Hz and 50 Hz differ by Fs and generate the same samples.", "expectedStatus": "supported", "sourceAnchorIds": ["dsap-sampling-v1-span-04", "dsap-sampling-v1-span-06"] },
+    { "caseId": "dsap-supported-03", "kind": "supported", "response": "The sample spacing is Ts=1/Fs.", "expectedStatus": "supported", "sourceAnchorIds": ["dsap-sampling-v1-span-01"] },
+    { "caseId": "dsap-supported-04", "kind": "supported", "response": "The sampled cosine depends on f/Fs.", "expectedStatus": "supported", "sourceAnchorIds": ["dsap-sampling-v1-span-03"] },
+    { "caseId": "dsap-incomplete-01", "kind": "incomplete", "response": "Sampling takes regular measurements of a signal.", "expectedStatus": "needs_precision", "sourceAnchorIds": ["dsap-sampling-v1-span-01"] },
+    { "caseId": "dsap-incomplete-02", "kind": "incomplete", "response": "Nyquist says the sampling rate should be high enough.", "expectedStatus": "needs_precision", "sourceAnchorIds": ["dsap-sampling-v1-span-02"] },
+    { "caseId": "dsap-incomplete-03", "kind": "incomplete", "response": "The samples depend on the signal frequency.", "expectedStatus": "needs_precision", "sourceAnchorIds": ["dsap-sampling-v1-span-03"] },
+    { "caseId": "dsap-incomplete-04", "kind": "incomplete", "response": "Aliasing means the sampled graph may look different.", "expectedStatus": "needs_precision", "sourceAnchorIds": ["dsap-sampling-v1-span-05"] },
+    { "caseId": "dsap-misconception-01", "kind": "misconception", "response": "A higher signal frequency is always visible if we sample it, no matter how slowly.", "expectedStatus": "misconception", "misconceptionType": "sampling_condition", "sourceAnchorIds": ["dsap-sampling-v1-span-02"] },
+    { "caseId": "dsap-misconception-02", "kind": "misconception", "response": "Aliasing happens because the computer changes the original frequency after sampling.", "expectedStatus": "misconception", "misconceptionType": "causal_mechanism", "sourceAnchorIds": ["dsap-sampling-v1-span-04"] },
+    { "caseId": "dsap-misconception-03", "kind": "misconception", "response": "If two sampled sequences look identical, the original continuous signals must have been identical.", "expectedStatus": "misconception", "misconceptionType": "alias_frequency", "sourceAnchorIds": ["dsap-sampling-v1-span-04"] },
+    { "caseId": "dsap-misconception-04", "kind": "misconception", "response": "We can always remove aliasing later by filtering the already sampled data.", "expectedStatus": "misconception", "misconceptionType": "causal_mechanism", "sourceAnchorIds": ["dsap-sampling-v1-span-05"] },
+    { "caseId": "dsap-ambiguous-01", "kind": "ambiguous", "response": "Sampling is like taking snapshots, but I am not sure how the rate changes the result.", "expectedStatus": "needs_human_review", "sourceAnchorIds": [] },
+    { "caseId": "dsap-ambiguous-02", "kind": "ambiguous", "response": "Nyquist always means double the frequency, even when the signal is not band limited.", "expectedStatus": "needs_human_review", "sourceAnchorIds": [] },
+    { "caseId": "dsap-ambiguous-03", "kind": "ambiguous", "response": "The waveform folds when it is sampled.", "expectedStatus": "needs_human_review", "sourceAnchorIds": [] },
+    { "caseId": "dsap-ambiguous-04", "kind": "ambiguous", "response": "The frequency is 10 or 50 depending on what the device expects.", "expectedStatus": "needs_human_review", "sourceAnchorIds": [] }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "schemaVersion": "contracts/v1",
+  "subjectCatalog": "subjects.json",
+  "cases": [
+    {
+      "caseId": "dynamic-01-dsap-catalog",
+      "kind": "catalog",
+      "input": { "subjectId": "dsap", "moduleId": "sampling-aliasing" },
+      "expected": { "status": 200, "containsConcept": "nyquist-alias", "sourcePackRequired": false }
+    },
+    {
+      "caseId": "dynamic-02-sampling-aliasing",
+      "kind": "interactive",
+      "input": { "frequencyHz": 400, "sampleRate": 600 },
+      "expected": { "alias": true, "nyquistHz": 300, "observedAliasHz": 200 }
+    },
+    {
+      "caseId": "dynamic-03-sampling-safe",
+      "kind": "interactive",
+      "input": { "frequencyHz": 400, "sampleRate": 1000 },
+      "expected": { "alias": false, "nyquistHz": 500 }
+    },
+    {
+      "caseId": "dynamic-04-recommendation-guided",
+      "kind": "recommendation",
+      "input": { "subjectId": "dsap", "skills": [] },
+      "expected": { "mode": "worked_example", "reason": "no_skill_evidence_yet" }
+    },
+    {
+      "caseId": "dynamic-05-recommendation-repair",
+      "kind": "recommendation",
+      "input": { "subjectId": "dsap", "skills": [{ "skillId": "aliasing", "status": "struggling", "masteryScore": 0.2 }] },
+      "expected": { "mode": "retrieval", "reason": "recent_skill_evidence_needs_repair" }
+    },
+    {
+      "caseId": "dynamic-06-recommendation-build",
+      "kind": "recommendation",
+      "input": { "subjectId": "dsap", "skills": [{ "skillId": "aliasing", "status": "mastered", "masteryScore": 0.9 }] },
+      "expected": { "mode": "exam_bridge", "reason": "skills_have_strong_evidence" }
+    },
+    {
+      "caseId": "dynamic-07-memory-isolation",
+      "kind": "privacy",
+      "input": { "learnerA": "qa-learner-a", "learnerB": "qa-learner-b", "key": "preferred-mode" },
+      "expected": { "aSeesOwnMemory": true, "bSeesA": false }
+    },
+    {
+      "caseId": "dynamic-08-memory-delete",
+      "kind": "privacy",
+      "input": { "learner": "qa-delete", "key": "preferred-mode" },
+      "expected": { "deleteStatus": 200, "memoryAfterDelete": false }
+    },
+    {
+      "caseId": "dynamic-09-memory-export",
+      "kind": "privacy",
+      "input": { "learner": "qa-export" },
+      "expected": { "status": 200, "contains": ["profile", "memory", "skills"], "noOtherLearnerData": true }
+    },
+    {
+      "caseId": "dynamic-10-source-bound-audit",
+      "kind": "validation",
+      "input": { "subjectId": "photosynthesis", "conceptId": "matter-vs-energy", "sourceAnchorIds": ["photosynthesis-v1-span-99"] },
+      "expected": { "status": 422, "errorCode": "invalid_source_anchor" }
+    },
+    {
+      "caseId": "dynamic-11-unknown-subject",
+      "kind": "catalog",
+      "input": { "subjectId": "not-a-subject" },
+      "expected": { "status": 404, "errorCode": "not_found" }
+    }
+  ]
+}

@@ -1,0 +1,104 @@
+{
+  "schemaVersion": "contracts/v1",
+  "catalogVersion": 1,
+  "subjects": [
+    {
+      "subjectId": "photosynthesis",
+      "title": "Photosynthesis",
+      "summary": "Trace matter and energy through a plant.",
+      "version": 1,
+      "modules": [
+        {
+          "moduleId": "plant-mass",
+          "title": "Where does plant mass come from?",
+          "summary": "Matter inputs versus energy inputs.",
+          "position": 1,
+          "concepts": [
+            {
+              "conceptId": "matter-vs-energy",
+              "title": "Matter versus energy",
+              "prompt": "Teach back where most of a plant's dry mass comes from and how photosynthesis makes that possible.",
+              "learningGoal": "Distinguish matter inputs from energy inputs.",
+              "skillIds": ["matter-energy-separation", "causal-explanation"],
+              "sourcePackId": "photosynthesis-v1",
+              "learningMode": "guided"
+            },
+            {
+              "conceptId": "carbon-source",
+              "title": "Follow one carbon atom",
+              "prompt": "Explain how carbon dioxide becomes part of a plant sugar.",
+              "learningGoal": "Trace carbon from air into plant biomass.",
+              "skillIds": ["matter-energy-separation"],
+              "sourcePackId": "photosynthesis-v1",
+              "learningMode": "guided"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "subjectId": "dsap",
+      "title": "Digital Signal Analysis & Processing",
+      "summary": "Turn waveforms into evidence you can inspect, sample, and explain.",
+      "version": 1,
+      "modules": [
+        {
+          "moduleId": "sampling-aliasing",
+          "title": "Sampling and aliasing",
+          "summary": "Predict how a continuous cosine appears after sampling and explain when frequencies become indistinguishable.",
+          "position": 1,
+          "concepts": [
+            {
+              "conceptId": "sampling-frequency",
+              "title": "Sampling frequency",
+              "prompt": "Explain how the sampling interval and sampling frequency determine the points kept from a continuous signal.",
+              "learningGoal": "Connect sampling interval and sampling frequency.",
+              "skillIds": ["sampling-frequency"],
+              "learningMode": "build"
+            },
+            {
+              "conceptId": "nyquist-condition",
+              "title": "Nyquist condition",
+              "prompt": "Explain why a 400 Hz tone sampled at 600 samples/second can alias.",
+              "learningGoal": "Connect sampling rate and the Nyquist condition.",
+              "skillIds": ["nyquist-condition"],
+              "learningMode": "build"
+            },
+            {
+              "conceptId": "alias-frequency",
+              "title": "Alias frequency",
+              "prompt": "Explain how two frequencies can produce the same sampled sequence.",
+              "learningGoal": "Identify an alias frequency and explain why it is indistinguishable after sampling.",
+              "skillIds": ["alias-frequency"],
+              "learningMode": "build"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "subjectId": "ai-literacy",
+      "title": "AI literacy",
+      "summary": "Build reliable habits for working with AI systems.",
+      "version": 1,
+      "modules": [
+        {
+          "moduleId": "clear-instructions",
+          "title": "Clear instructions",
+          "summary": "Turn intent into testable instructions.",
+          "position": 1,
+          "concepts": [
+            {
+              "conceptId": "observable-output",
+              "title": "Ask for observable outputs",
+              "prompt": "Rewrite an ambiguous AI request so a reviewer can test its result.",
+              "learningGoal": "Connect instructions to observable checks.",
+              "skillIds": ["specification", "verification"],
+              "learningMode": "guided"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

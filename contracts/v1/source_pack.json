@@ -1,0 +1,86 @@
+{
+  "sourcePackId": "photosynthesis-v1",
+  "lessonId": "photosynthesis",
+  "version": 1,
+  "title": "Where does a plant's mass come from?",
+  "topic": "photosynthesis",
+  "license": {
+    "name": "CC BY 4.0",
+    "holder": "Feynman AI project",
+    "notice": "Project-authored source pack. Attribute: Feynman AI project, Photosynthesis source pack v1."
+  },
+  "sourceDocument": {
+    "path": "docs/source-packs/photosynthesis-v1.md",
+    "version": 1,
+    "checksum": "96f3d5a331a0964ba97db49d0cdb51f269ad1f1f8980209f90aa1e65ee2ee5a1"
+  },
+  "approvedBy": "Feynman AI curriculum owner",
+  "approvedAt": "2026-07-17T00:00:00Z",
+  "spans": [
+    {
+      "spanId": "photosynthesis-v1-span-01",
+      "section": "The mass question",
+      "text": "A plant's dry mass is made mostly from carbon-containing compounds built from carbon dioxide and water during photosynthesis.",
+      "checksum": "ea77393dc88be4645b8923816a777f268a0f70556a83d0291beb3647a8569f62",
+      "sourceRef": "docs/source-packs/photosynthesis-v1.md#span-01",
+      "timestampSeconds": null
+    },
+    {
+      "spanId": "photosynthesis-v1-span-02",
+      "section": "Carbon dioxide supplies carbon",
+      "text": "During photosynthesis, carbon dioxide enters leaves and supplies carbon atoms that become part of sugars.",
+      "checksum": "0ffdaf147cfeb0cc92dfddbacbc3ee14624c83047f9f7646319742296a508a11",
+      "sourceRef": "docs/source-packs/photosynthesis-v1.md#span-02",
+      "timestampSeconds": null
+    },
+    {
+      "spanId": "photosynthesis-v1-span-03",
+      "section": "Water is raw material",
+      "text": "Water supplies hydrogen and oxygen atoms and is a raw material used to make sugars.",
+      "checksum": "7eaa9fbcf025cd6c587180fee811ca12b6001790e9349315a49491c0de834c5a",
+      "sourceRef": "docs/source-packs/photosynthesis-v1.md#span-03",
+      "timestampSeconds": null
+    },
+    {
+      "spanId": "photosynthesis-v1-span-04",
+      "section": "Light supplies energy",
+      "text": "Light provides energy for photosynthesis; light is not converted into the plant's dry mass.",
+      "checksum": "a7e36ce93aab351668780853ca7b17a3db815eaf601099f7fda5cb8192a37c31",
+      "sourceRef": "docs/source-packs/photosynthesis-v1.md#span-04",
+      "timestampSeconds": null
+    },
+    {
+      "spanId": "photosynthesis-v1-span-05",
+      "section": "Minerals are a small fraction",
+      "text": "Mineral nutrients from soil are essential for growth, but they account for only a small fraction of most plant dry mass.",
+      "checksum": "946c7080a9e03ce76b9c83f7c1cc48c6385fb124435630d5fad027ed7bd1bc95",
+      "sourceRef": "docs/source-packs/photosynthesis-v1.md#span-05",
+      "timestampSeconds": null
+    },
+    {
+      "spanId": "photosynthesis-v1-span-06",
+      "section": "Carbon is not primarily from soil",
+      "text": "The carbon in a plant's sugars is not taken primarily from soil; it is fixed from carbon dioxide in air.",
+      "checksum": "2d7e3f0b604ad73a6c3a17700ec769dee23f41caa006c381b8f076ee86ba5c67",
+      "sourceRef": "docs/source-packs/photosynthesis-v1.md#span-06",
+      "timestampSeconds": null
+    },
+    {
+      "spanId": "photosynthesis-v1-span-07",
+      "section": "The transformation",
+      "text": "Photosynthesis uses light energy to combine carbon dioxide and water into sugars, releasing oxygen as a by-product.",
+      "checksum": "d4466a9d82bd4049439f6d66d43a140c45ec69164523478cbbe250e812fe9f67",
+      "sourceRef": "docs/source-packs/photosynthesis-v1.md#span-07",
+      "timestampSeconds": null
+    },
+    {
+      "spanId": "photosynthesis-v1-span-08",
+      "section": "Matter versus energy",
+      "text": "A useful explanation should distinguish matter inputs (carbon dioxide, water, minerals) from an energy input (light).",
+      "checksum": "32ae1d879ca19c012be233f4ae8d13caddfe550e06b07a95af9c501960544d0e",
+      "sourceRef": "docs/source-packs/photosynthesis-v1.md#span-08",
+      "timestampSeconds": null
+    }
+  ],
+  "packChecksum": "405ad1b72acccf734b7ab8fdaa902738a96bc6680196e2f328501022603409fc"
+}

@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://feynman-ai.local/contracts/v2/subject-pack.schema.json",
+  "title": "Feynman subject pack",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["subjectId", "title", "domain", "version", "modules", "sourcePackVersion", "learningModes"],
+  "properties": {
+    "subjectId": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+    "title": { "type": "string", "minLength": 1 },
+    "domain": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "minLength": 1 },
+    "syllabus": { "type": "object" },
+    "modules": { "type": "array", "items": { "$ref": "#/definitions/module" } },
+    "sourcePackVersion": { "type": "string", "minLength": 1 },
+    "learningModes": { "type": "array", "items": { "$ref": "learning-mode.schema.json" } },
+    "evaluationCases": { "type": "array", "items": { "type": "object" } }
+  },
+  "definitions": {
+    "module": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["moduleId", "title", "objective", "concepts", "checkpoints"],
+      "properties": {
+        "moduleId": { "type": "string" },
+        "title": { "type": "string" },
+        "objective": { "type": "string" },
+        "prerequisites": { "type": "array", "items": { "type": "string" } },
+        "concepts": { "type": "array", "items": { "$ref": "#/definitions/concept" } },
+        "mediaAssets": { "type": "array", "items": { "type": "object" } },
+        "checkpoints": { "type": "array", "items": { "$ref": "#/definitions/checkpoint" } },
+        "examBridge": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    "concept": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["conceptId", "title", "skillType", "allowedLearningModes"],
+      "properties": {
+        "conceptId": { "type": "string" },
+        "title": { "type": "string" },
+        "skillType": { "type": "string", "enum": ["conceptual", "procedural", "transfer", "explanation"] },
+        "prerequisiteConceptIds": { "type": "array", "items": { "type": "string" } },
+        "misconceptionTypes": { "type": "array", "items": { "type": "string" } },
+        "allowedLearningModes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["checkpointId", "conceptId", "prompt", "responseType", "sourceAnchorIds"],
+      "properties": {
+        "checkpointId": { "type": "string" },
+        "conceptId": { "type": "string" },
+        "pauseAtMs": { "type": "integer", "minimum": 0 },
+        "prompt": { "type": "string" },
+        "responseType": { "type": "string", "enum": ["choice", "number", "text", "mixed"] },
+        "sourceAnchorIds": { "type": "array", "items": { "type": "string" } },
+        "acceptedAnswerRule": { "type": "object" },
+        "misconceptionTypes": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

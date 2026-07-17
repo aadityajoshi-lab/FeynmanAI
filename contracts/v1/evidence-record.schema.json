@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://feynman-ai.local/contracts/v1/evidence-record.schema.json",
+  "title": "Versioned Evidence Record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["recordId", "sessionId", "lessonId", "sourcePackId", "recordVersion", "providerMode", "state", "learnerText", "claims", "createdAt", "updatedAt"],
+  "properties": {
+    "recordId": { "type": "string", "pattern": "^rec_[A-Za-z0-9_-]{8,64}$" },
+    "sessionId": { "$ref": "common.schema.json#/$defs/sessionId" },
+    "lessonId": { "const": "photosynthesis" },
+    "sourcePackId": { "const": "photosynthesis-v1" },
+    "recordVersion": { "$ref": "common.schema.json#/$defs/recordVersion" },
+    "providerMode": { "$ref": "common.schema.json#/$defs/providerMode" },
+    "state": { "$ref": "common.schema.json#/$defs/sessionState" },
+    "learnerText": { "type": "string", "minLength": 1, "maxLength": 12000 },
+    "claims": {
+      "type": "array",
+      "maxItems": 12,
+      "items": { "$ref": "claim.schema.json" }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "title"],
+      "properties": {
+        "status": { "type": "string", "enum": ["draft", "ready_to_ship", "shipped"] },
+        "title": { "type": "string", "minLength": 1 },
+        "shippedAt": { "$ref": "common.schema.json#/$defs/dateTime" }
+      }
+    },
+    "warnings": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "createdAt": { "$ref": "common.schema.json#/$defs/dateTime" },
+    "updatedAt": { "$ref": "common.schema.json#/$defs/dateTime" }
+  }
+}

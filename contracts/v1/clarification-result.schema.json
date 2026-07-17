@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://feynman-ai.local/contracts/v1/clarification-result.schema.json",
+  "title": "Claim clarification result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sessionId", "claimId", "recordVersion", "providerMode", "state", "question", "sourceAnchorIds"],
+  "properties": {
+    "sessionId": { "$ref": "common.schema.json#/$defs/sessionId" },
+    "claimId": { "$ref": "common.schema.json#/$defs/claimId" },
+    "recordVersion": { "$ref": "common.schema.json#/$defs/recordVersion" },
+    "providerMode": { "$ref": "common.schema.json#/$defs/providerMode" },
+    "state": { "$ref": "common.schema.json#/$defs/clarificationState" },
+    "question": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "answer": { "type": "string", "minLength": 1, "maxLength": 4000 },
+    "sourceAnchorIds": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "$ref": "common.schema.json#/$defs/sourceAnchorId" }
+    },
+    "reasonCode": { "type": "string", "enum": ["outside_source_pack", "ambiguous_question", "provider_unavailable", "invalid_output"] }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "state": { "const": "answered" } } },
+      "then": { "required": ["answer"], "properties": { "sourceAnchorIds": { "minItems": 1 } } }
+    },
+    {
+      "if": { "properties": { "state": { "enum": ["abstained", "needs_human_review"] } } },
+      "then": { "required": ["reasonCode"] }
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://feynman-ai.local/contracts/v3/study-chat.schema.json",
+  "title": "Contextual study module chat response",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["state", "reply", "reasonCode", "sourceAnchorIds", "action", "providerMode", "sourcePackVersion", "recordVersion"],
+  "properties": {
+    "state": { "type": "string", "enum": ["answered", "abstained", "needs_human_review", "action_only"] },
+    "reply": { "type": "string" },
+    "reasonCode": { "type": ["string", "null"] },
+    "sourceAnchorIds": { "type": "array", "items": { "type": "string" } },
+    "action": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "sceneId", "modeId", "reason"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["none", "next_scene", "previous_scene", "open_scene", "focus_checkpoint", "show_visualization", "repeat_explanation", "set_learning_mode"] },
+        "sceneId": { "type": ["string", "null"] },
+        "modeId": { "type": ["string", "null"] },
+        "reason": { "type": "string" }
+      }
+    },
+    "providerMode": { "type": "string", "enum": ["codex_fixture", "live_openai", "live_fireworks", "human_review"] },
+    "sourcePackVersion": { "type": "string" },
+    "recordVersion": { "type": "integer", "minimum": 1 },
+    "reviewRequired": { "type": "boolean" }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "sourcePackId": "dsap-sampling-v1",
+  "version": "1.0.0",
+  "license": "Instructor-authored summary based on the supplied DSAP syllabus and notes; textbook excerpts are not redistributed.",
+  "approvalStatus": "instructor_review_required",
+  "checksum": "pending-content-hash",
+  "spans": [
+    { "spanId": "dsap-sampling-v1-span-01", "section": "Sampling definition", "text": "Sampling represents a continuous-time signal by taking values at regularly spaced time instants. The spacing is the sampling interval Ts and the rate is Fs = 1/Ts.", "locator": { "kind": "syllabus-note", "page": 1 } },
+    { "spanId": "dsap-sampling-v1-span-02", "section": "Nyquist condition", "text": "For a band-limited sinusoid with highest frequency B, faithful reconstruction requires a sampling rate greater than twice B. Sampling below this boundary can create aliasing.", "locator": { "kind": "syllabus-note", "page": 2 } },
+    { "spanId": "dsap-sampling-v1-span-03", "section": "Discrete representation", "text": "For x(t)=cos(2πft), sampling at t=nTs gives x[n]=cos(2πf/Fs · n). The discrete sequence depends on the frequency ratio f/Fs.", "locator": { "kind": "syllabus-note", "page": 3 } },
+    { "spanId": "dsap-sampling-v1-span-04", "section": "Aliasing equivalence", "text": "Frequencies that differ by an integer multiple of Fs produce the same sampled sequence because cos(2π(f+kFs)/Fs · n)=cos(2πf/Fs · n) for integer n and k.", "locator": { "kind": "syllabus-note", "page": 4 } },
+    { "spanId": "dsap-sampling-v1-span-05", "section": "Practical consequence", "text": "Aliasing cannot be repaired after sampling by simply looking at the samples; the sampling rate or an anti-aliasing filter must prevent the ambiguity before conversion.", "locator": { "kind": "syllabus-note", "page": 5 } },
+    { "spanId": "dsap-sampling-v1-span-06", "section": "Worked example", "text": "With Fs=40 Hz, a 10 Hz sinusoid and a 50 Hz sinusoid differ by one sampling frequency and therefore produce the same discrete-time samples.", "locator": { "kind": "supplied-question", "page": 1 } }
+  ]
+}

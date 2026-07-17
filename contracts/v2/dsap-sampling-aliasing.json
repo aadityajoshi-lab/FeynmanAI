@@ -1,0 +1,48 @@
+{
+  "subjectId": "dsap",
+  "title": "Digital Signal Analysis and Processing",
+  "domain": "engineering",
+  "version": "dsap-v1",
+  "sourcePackVersion": "dsap-sampling-v1",
+  "syllabus": {
+    "examHorizonDays": 30,
+    "weeks": [
+      { "week": 1, "topics": ["discrete signals", "periodicity", "energy and power", "sampling and aliasing"] },
+      { "week": 2, "topics": ["LTI systems", "convolution", "Z-transform"] },
+      { "week": 3, "topics": ["FIR/IIR structures", "FIR design", "IIR design"] },
+      { "week": 4, "topics": ["DFT", "FFT", "exam bridge"] }
+    ]
+  },
+  "learningModes": [
+    { "modeId": "worked_example", "title": "Worked example + fading", "description": "See a complete derivation, then take back one step at a time.", "useWhen": "You cannot begin or lose procedural steps.", "evidenceStrength": "strong" },
+    { "modeId": "predict_reveal", "title": "Predict → reveal", "description": "Predict what changes before the whiteboard reveals it.", "useWhen": "You make wrong predictions about changing conditions.", "evidenceStrength": "design_support" },
+    { "modeId": "self_explain", "title": "Self-explanation", "description": "Explain why each transformation is valid.", "useWhen": "You get the answer but cannot explain why.", "evidenceStrength": "moderate" },
+    { "modeId": "retrieval", "title": "Retrieval practice", "description": "Recall a rule or equation before seeing notes.", "useWhen": "You cannot recall definitions, equations, or rules.", "evidenceStrength": "strong" },
+    { "modeId": "spaced_review", "title": "Spaced review", "description": "Return to a concept at increasing intervals.", "useWhen": "You understand today but forget later.", "evidenceStrength": "strong" },
+    { "modeId": "interleaved_contrast", "title": "Interleaved contrast", "description": "Compare nearby concepts in mixed practice.", "useWhen": "You confuse similar concepts.", "evidenceStrength": "moderate" },
+    { "modeId": "concrete_example", "title": "Concrete example", "description": "Connect the abstraction to a real signal or measurement.", "useWhen": "You know the formula but not when to use it.", "evidenceStrength": "moderate" },
+    { "modeId": "representation_switch", "title": "Representation switch", "description": "Move between equation, waveform, table, diagram, and prose.", "useWhen": "You understand one representation but not another.", "evidenceStrength": "moderate" },
+    { "modeId": "exam_bridge", "title": "Exam bridge", "description": "Apply the concept to one bounded exam-style problem.", "useWhen": "You understand the idea but cannot apply it under exam conditions.", "evidenceStrength": "design_support" }
+  ],
+  "modules": [
+    {
+      "moduleId": "sampling-aliasing",
+      "title": "Sampling and aliasing",
+      "objective": "Predict how a continuous cosine appears after sampling and explain when two frequencies become indistinguishable.",
+      "prerequisites": ["discrete-time-signals", "periodicity"],
+      "concepts": [
+        { "conceptId": "sampling-frequency", "title": "Sampling frequency", "skillType": "conceptual", "allowedLearningModes": ["predict_reveal", "concrete_example", "representation_switch"] },
+        { "conceptId": "nyquist-condition", "title": "Nyquist condition", "skillType": "conceptual", "allowedLearningModes": ["worked_example", "retrieval", "self_explain"] },
+        { "conceptId": "alias-frequency", "title": "Alias frequency", "skillType": "transfer", "allowedLearningModes": ["predict_reveal", "interleaved_contrast", "exam_bridge"] }
+      ],
+      "mediaAssets": [{ "assetId": "sampling-aliasing-whiteboard", "kind": "whiteboard", "status": "authored_manifest", "durationMs": 105, "captions": "sampling-aliasing.vtt" }],
+      "checkpoints": [
+        { "checkpointId": "sampling-check-01", "conceptId": "sampling-frequency", "pauseAtMs": 18000, "prompt": "If the sampling rate increases while the signal stays the same, what happens to the distance between sample points?", "responseType": "choice", "sourceAnchorIds": ["dsap-sampling-v1-span-01"] },
+        { "checkpointId": "sampling-check-02", "conceptId": "nyquist-condition", "pauseAtMs": 42000, "prompt": "For a 10 Hz sinusoid, which sampling rate avoids aliasing under the Nyquist condition?", "responseType": "number", "sourceAnchorIds": ["dsap-sampling-v1-span-02"] },
+        { "checkpointId": "sampling-check-03", "conceptId": "alias-frequency", "pauseAtMs": 68000, "prompt": "At Fs = 40 Hz, do 10 Hz and 50 Hz produce the same samples? Explain why or why not.", "responseType": "mixed", "sourceAnchorIds": ["dsap-sampling-v1-span-03", "dsap-sampling-v1-span-04"] },
+        { "checkpointId": "sampling-check-04", "conceptId": "alias-frequency", "pauseAtMs": 90000, "prompt": "Change Fs below the Nyquist rate and explain the visible waveform change.", "responseType": "mixed", "sourceAnchorIds": ["dsap-sampling-v1-span-02", "dsap-sampling-v1-span-05"] }
+      ],
+      "examBridge": [{ "examBridgeId": "sampling-exam-01", "prompt": "Given x(t)=cos(2π·50t) sampled at Fs=40 Hz, identify the equivalent discrete-time frequency and justify it." }]
+    }
+  ]
+}
