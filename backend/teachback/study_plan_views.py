@@ -15,7 +15,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .providers import CHAT_ACTION_TYPES, LEARNING_MODE_IDS, ModuleChatRequest, ProviderOutputError, ProviderUnavailable, StudyPlanRequest, provider_for
+from .providers import CHAT_ACTION_TYPES, LEARNING_MODE_IDS, ModuleChatRequest, ProviderOutputError, ProviderUnavailable, StudyPlanRequest, normalize_checkpoint_feedback, provider_for
 from .models import StudySource
 
 
@@ -31,6 +31,25 @@ def _dsap_source_pack() -> dict:
         return {"sourcePackId": "dsap-sampling-v1", "version": "unknown", "spans": []}
 
 
+def _guided_source_context(source_id: str, subject_title: str, learning_goal: str, skill_level: str) -> tuple[list[dict], set[str], str, bool]:
+    """Create a typed, non-citation anchor for a module with no uploads.
+
+    Guided practice is intentionally separate from uploaded evidence. The
+    anchor lets the existing manifest and interaction contracts stay typed,
+    while the provider prompt labels the lesson as general practice rather
+    than implying that a learner document was reviewed.
+    """
+    anchor_id = f"{source_id}-context"
+    span = {
+        "sourceId": source_id,
+        "sourceKind": "guided_context",
+        "candidateId": anchor_id,
+        "text": f"Guided practice context: {subject_title or 'selected skill'}; goal={learning_goal}; level={skill_level}. No learner source document was uploaded.",
+        "locator": {"kind": "guided_context"},
+    }
+    return [span], {anchor_id}, f"guided-{source_id.removeprefix('guided:')}", False
+
+
 def _source_context(source_ids: list[str]) -> tuple[list[dict], set[str], str, bool]:
     """Resolve browser IDs to server-owned source candidates and anchors."""
     if source_ids == ["dsap-sampling-v1"]:
@@ -38,6 +57,8 @@ def _source_context(source_ids: list[str]) -> tuple[list[dict], set[str], str, b
         spans = [{"sourceId": "dsap-sampling-v1", **span} for span in pack.get("spans", [])]
         anchors = {str(span.get("spanId")) for span in spans if span.get("spanId")}
         return spans, anchors, str(pack.get("sourcePackId", "dsap-sampling-v1")), pack.get("approvalStatus") != "approved"
+    if len(source_ids) == 1 and source_ids[0].startswith("guided:"):
+        return _guided_source_context(source_ids[0], source_ids[0].removeprefix("guided:").replace("-", " "), "skill", "beginner")
     records = list(StudySource.objects.filter(source_id__in=source_ids))
     by_id = {record.source_id: record for record in records}
     if len(by_id) != len(set(source_ids)):
@@ -138,10 +159,16 @@ class StudyPlanView(APIView):
         chapter_selection = str(body.get("chapterSelection") or "chapter_1").strip()
         if chapter_selection not in {"chapter_1", "all"}:
             return _error("chapterSelection must be chapter_1 or all")
-        source_ids = body.get("sourceIds") or ["dsap-sampling-v1"]
-        if not isinstance(source_ids, list) or not source_ids or len(source_ids) > 20 or any(not isinstance(item, str) or not item.strip() for item in source_ids):
-            return _error("sourceIds must be a non-empty list of IDs")
-        source_ids = [item.strip() for item in source_ids]
+        raw_source_ids = body.get("sourceIds", None)
+        if raw_source_ids is None:
+            source_ids = ["dsap-sampling-v1"]
+        else:
+            if not isinstance(raw_source_ids, list) or len(raw_source_ids) > 20 or any(not isinstance(item, str) or not item.strip() for item in raw_source_ids):
+                return _error("sourceIds must be a list of IDs")
+            source_ids = [item.strip() for item in raw_source_ids]
+            if not source_ids:
+                safe_subject = "-".join(ch for ch in subject_id.lower() if ch.isalnum() or ch == "-")[:70].strip("-") or "guided-skill"
+                source_ids = [f"guided:{safe_subject}"]
         past_question_source_ids = body.get("pastQuestionSourceIds") or []
         if not isinstance(past_question_source_ids, list) or any(not isinstance(item, str) or not item.strip() for item in past_question_source_ids):
             return _error("pastQuestionSourceIds must be a list of source IDs")
@@ -153,11 +180,29 @@ class StudyPlanView(APIView):
         if provider_mode not in provider_aliases:
             return _error("provider must be fireworks, openai, or fixture")
         try:
-            source_spans, allowed_anchors, source_pack_version, review_required = _source_context(source_ids)
+            if source_ids[0].startswith("guided:"):
+                source_spans, allowed_anchors, source_pack_version, review_required = _guided_source_context(
+                    source_ids[0], str(body.get("subjectTitle") or subject_id), str(body.get("learningGoal") or "skill"), str(body.get("skillLevel") or "beginner")
+                )
+            else:
+                source_spans, allowed_anchors, source_pack_version, review_required = _source_context(source_ids)
             if not source_spans:
                 return Response({"state": "needs_human_review", "reasonCode": "source_extraction_pending", "providerMode": "human_review", "sourceIds": source_ids, "chapterSelection": chapter_selection, "sourcePackVersion": source_pack_version, "recordVersion": 1, "reviewRequired": True}, status=status.HTTP_200_OK)
             provider = provider_for(provider_aliases[provider_mode])
-            plan = provider.generate_study_plan(StudyPlanRequest(subject_id, module_id, source_ids, chapter_selection, sorted(allowed_anchors), source_spans=source_spans, subject_title=str(body.get("subjectTitle") or subject_id), past_question_source_ids=past_question_source_ids))
+            plan = provider.generate_study_plan(StudyPlanRequest(
+                subject_id,
+                module_id,
+                source_ids,
+                chapter_selection,
+                sorted(allowed_anchors),
+                source_spans=source_spans,
+                subject_title=str(body.get("subjectTitle") or subject_id),
+                past_question_source_ids=past_question_source_ids,
+                learning_goal=str(body.get("learningGoal") or "course"),
+                assessment_focus=str(body.get("assessmentFocus") or "mastery"),
+                skill_level=str(body.get("skillLevel") or "beginner"),
+                goal_brief=str(body.get("goalBrief") or "")[:500],
+            ))
             # Human-review plans are a safe terminal state for unapproved uploads.
             if plan.get("state") == "needs_human_review":
                 return Response({**plan, "sourcePackVersion": source_pack_version, "recordVersion": 1, "reviewRequired": True}, status=status.HTTP_200_OK)
@@ -243,6 +288,7 @@ class StudyPlanInteractionView(APIView):
                 "attachment": attachment,
             }
             result = provider.evaluate_checkpoint(provider_request)
+            result = normalize_checkpoint_feedback(result, manifest, response_text)
             result.update({
                 "sourcePackVersion": source_pack_version,
                 "recordVersion": 1,

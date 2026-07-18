@@ -72,14 +72,14 @@ class StudySourceIngestView(APIView):
                 return _error(str(exc), "pdf_extraction_failed")
             candidates = [
                 {
-                    "candidateId": f"candidate_{metadata.sha256[:12]}_{item.locator.get('page', index + 1):03d}",
+                    "candidateId": f"candidate_{metadata.sha256[:12]}_{item.locator.get('page', index + 1):03d}_{index + 1:02d}",
                     "text": item.text,
                     "locator": item.locator,
                     "status": item.status,
                 }
                 for index, item in enumerate(raw_candidates)
             ]
-            extraction = {"status": "complete", "method": "pypdf", "pageCandidateCount": len(candidates)}
+            extraction = {"status": "complete", "method": "pypdf", "pageCandidateCount": len(raw_candidates), "sectionCandidateCount": sum(1 for item in raw_candidates if item.locator.get("kind") == "pdf-section")}
         else:
             extraction["nextStep"] = "Run the approved OCR or transcript pipeline before publishing source spans."
 

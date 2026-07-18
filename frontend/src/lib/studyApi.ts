@@ -74,7 +74,7 @@ export async function ingestStudyUrl(url: string, metadata?: { subjectId?: strin
   return response.json() as Promise<StudySourceIngestResponse>;
 }
 
-export async function generateStudyPlan(input: { subjectId: string; subjectTitle?: string; moduleId?: string; sourceIds: string[]; pastQuestionSourceIds?: string[]; chapterSelection: "chapter_1" | "all"; provider?: "fireworks" | "openai" | "fixture" }): Promise<StudyPlanResponse> {
+export async function generateStudyPlan(input: { subjectId: string; subjectTitle?: string; moduleId?: string; sourceIds: string[]; pastQuestionSourceIds?: string[]; chapterSelection: "chapter_1" | "all"; provider?: "fireworks" | "openai" | "fixture"; learningGoal?: "course" | "skill" | "interview" | "viva"; assessmentFocus?: "mastery" | "mock_test" | "conversation" | "viva"; skillLevel?: "beginner" | "intermediate" | "advanced"; goalBrief?: string }): Promise<StudyPlanResponse> {
   const response = await fetch(`${API_BASE}/study-plans`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

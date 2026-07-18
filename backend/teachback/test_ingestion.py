@@ -44,3 +44,18 @@ def test_normalize_extracted_text_preserves_normal_double_letters():
     from teachback.ingestion import normalize_extracted_text
 
     assert normalize_extracted_text("A book about analog signals") == "A book about analog signals"
+
+
+def test_numbered_sections_are_split_without_merging_the_page():
+    from .ingestion import split_numbered_sections
+
+    text = (
+        "1.1 Introduction to instrumentation. " + "Measurement compares an unknown quantity with a standard known quantity. " * 3
+        + " 1.2 Analog instrumentation. " + "Analog instruments represent a measured quantity with a pointer or waveform. " * 3
+        + " 1.3 Microcomputer based instruments. " + "Microcomputer based instruments use a processor, memory, and software to acquire and display measurements. " * 3
+    )
+
+    sections = split_numbered_sections(text, page_number=1, sha256="abc")
+
+    assert [item.locator["section"] for item in sections] == ["1.1", "1.2", "1.3"]
+    assert all(item.locator["kind"] == "pdf-section" for item in sections)

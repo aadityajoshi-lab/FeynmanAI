@@ -44,6 +44,17 @@ def _approved_source_context(spans: list[dict], anchor_ids: list[str]) -> str:
     return "\n\n".join(lines)[:12000]
 
 
+def _usable_slide_text(value: object, minimum: int) -> bool:
+    """Reject provider artifacts such as repeated schema field names."""
+    if not isinstance(value, str):
+        return False
+    clean = " ".join(value.split())
+    if len(clean) < minimum or "sourceanchorids" in clean.casefold():
+        return False
+    words = clean.casefold().split()
+    return not (len(words) >= 4 and len(set(words)) == 1)
+
+
 def _validate_slide_manifest(manifest: dict, allowed_anchors: set[str], fallback_anchors: list[str] | None = None) -> list[dict]:
     if not isinstance(manifest, dict) or not isinstance(manifest.get("slides"), list):
         raise ProviderOutputError("Fireworks returned no slide lesson")
@@ -70,8 +81,18 @@ def _validate_slide_manifest(manifest: dict, allowed_anchors: set[str], fallback
         narration = str(slide.get("narration") or "").strip()
         bullets = slide.get("bullets")
         diagram = slide.get("diagram") if isinstance(slide.get("diagram"), dict) else {"nodes": [], "edges": []}
-        if not title or not body or not narration or not isinstance(bullets, list) or not bullets:
-            raise ProviderOutputError("remediation slide is missing learner-facing content")
+        clean_bullets = [" ".join(str(item).split())[:220] for item in bullets if _usable_slide_text(item, 4)] if isinstance(bullets, list) else []
+        if not _usable_slide_text(title, 3):
+            title = f"Step {index + 1}: repair the idea"
+        if not _usable_slide_text(body, 20):
+            body = "Review the source-grounded explanation, then connect the highlighted visual to the answer you should give."
+        if not _usable_slide_text(narration, 40):
+            narration = f"Focus on {title}. Read the explanation, follow the highlighted relationship, and use it to repair the original mistake."
+        if len(clean_bullets) < 2:
+            clean_bullets = [
+                f"Focus on the role of {title.lower()}.",
+                "Connect the explanation to the highlighted visual before retrying.",
+            ]
         nodes = diagram.get("nodes") if isinstance(diagram.get("nodes"), list) else []
         edges = diagram.get("edges") if isinstance(diagram.get("edges"), list) else []
         node_ids = {str(node.get("id")) for node in nodes if isinstance(node, dict) and node.get("id")}
@@ -80,7 +101,7 @@ def _validate_slide_manifest(manifest: dict, allowed_anchors: set[str], fallback
             "index": index,
             "title": title[:160],
             "body": body[:900],
-            "bullets": [str(item).strip()[:220] for item in bullets[:5] if str(item).strip()],
+            "bullets": clean_bullets[:5],
             "narration": narration[:1400],
             "sourceAnchorIds": valid_anchors,
             "diagram": {

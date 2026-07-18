@@ -54,7 +54,7 @@ class ClarificationRequest:
 
 @dataclass
 class StudyPlanRequest:
-    """A bounded request for a source-backed study manifest."""
+    """A bounded request for a source-backed or guided-practice manifest."""
 
     subject_id: str
     module_id: str | None
@@ -64,6 +64,10 @@ class StudyPlanRequest:
     source_spans: list[dict] = field(default_factory=list)
     subject_title: str = ""
     past_question_source_ids: list[str] = field(default_factory=list)
+    learning_goal: str = "course"
+    assessment_focus: str = "mastery"
+    skill_level: str = "beginner"
+    goal_brief: str = ""
 
 
 @dataclass
@@ -173,6 +177,82 @@ def normalize_retry_result(result: dict, manifest: dict) -> dict:
     if not result["retryPrompt"]:
         result["retryOptions"] = None
         result["retrySourceAnchorIds"] = []
+    return result
+
+
+def _usable_feedback(value: Any, minimum: int = 18) -> bool:
+    """Reject syntactically valid but unusable one-character model fields."""
+    if not isinstance(value, str):
+        return False
+    clean = " ".join(value.split())
+    return len(clean) >= minimum and any(character.isalpha() for character in clean)
+
+
+def _source_text_for_feedback(manifest: dict) -> str:
+    spans = manifest.get("sourceSpans") if isinstance(manifest.get("sourceSpans"), list) else []
+    parts = [str(span.get("text") or span.get("content") or "").strip() for span in spans if isinstance(span, dict)]
+    return " ".join(part for part in parts if part)[:1200]
+
+
+def _best_supported_option(stage: dict, source_text: str) -> str | None:
+    """Choose a likely source-supported option for degraded MCQ feedback.
+
+    This is only a guardrail for malformed provider prose. A normal provider
+    answer remains authoritative; the fallback is deliberately conservative and
+    uses the exact learner-facing options already present in the stage.
+    """
+    options = normalize_answer_options(stage.get("options") or stage.get("choices")) or []
+    if not options or not source_text:
+        return None
+    stop_words = {"about", "against", "among", "before", "being", "between", "directly", "from", "into", "that", "their", "them", "then", "this", "using", "with"}
+    source_words = set(re.findall(r"[a-z0-9]{4,}", source_text.casefold()))
+    scored = [(sum(word in source_words for word in re.findall(r"[a-z0-9]{4,}", option.casefold()) if word not in stop_words), option) for option in options]
+    score, option = max(scored, key=lambda item: item[0])
+    return option if score >= 2 else None
+
+
+def normalize_checkpoint_feedback(result: dict, manifest: dict, learner_response: str) -> dict:
+    """Make a degraded evaluator response useful instead of showing `T`/`R`.
+
+    Fireworks can occasionally satisfy a loose JSON schema with single-letter
+    placeholders. The learner should receive a complete, honest repair guide,
+    never raw provider fragments. This does not alter a normal, substantive
+    evaluation.
+    """
+    if result.get("correct") is not False:
+        return result
+    stage = manifest.get("stage") if isinstance(manifest.get("stage"), dict) else {}
+    kind = str(manifest.get("stageKind") or stage.get("kind") or "teach_back")
+    prompt = str(stage.get("prompt") or manifest.get("prompt") or "this concept").strip()
+    source_text = _source_text_for_feedback(manifest)
+    supported_option = _best_supported_option(stage, source_text) if kind == "mcq" else None
+    response_label = " ".join(str(learner_response or "").split())[:240]
+    if not _usable_feedback(result.get("feedback")):
+        result["feedback"] = "Your answer was not enough to demonstrate the target concept. Use the repair guide below, then try the similar question."
+    if not _usable_feedback(result.get("mistake")):
+        result["mistake"] = f"The response did not clearly address the exact question: {prompt[:220]}"
+        if response_label and len(response_label) >= 8:
+            result["mistake"] = f"You selected or entered “{response_label}”, but the response did not match the complete idea required by this check."
+    if not _usable_feedback(result.get("correctAnswer")):
+        if supported_option:
+            result["correctAnswer"] = f"{supported_option}"
+        else:
+            result["correctAnswer"] = f"Answer the question using the topic definition: {prompt[:260]}"
+    if not _usable_feedback(result.get("correction")):
+        if supported_option:
+            result["correction"] = f"For this question, the best-supported option is “{supported_option}”. Compare that statement with the source explanation and trace the role it describes in the diagram."
+        elif source_text:
+            result["correction"] = f"Reread the source explanation and connect it to the question. The relevant idea is: {source_text[:700]}"
+        else:
+            result["correction"] = "Reread the definition, name the key relationship, and apply it to the exact situation in the question before retrying."
+    if not _usable_feedback(result.get("remediation")):
+        result["remediation"] = f"Review the definition and visual for “{prompt[:220]}”, then explain why your next answer fits the topic."
+    if not result.get("retryPrompt") or not _usable_feedback(result.get("retryPrompt"), minimum=12):
+        result["retryPrompt"] = f"Try a similar check: which statement best answers the same idea tested by “{prompt[:180]}”?"
+    if kind == "mcq" and len(normalize_answer_options(result.get("retryOptions")) or []) < 3:
+        options = normalize_answer_options(stage.get("options") or stage.get("choices"))
+        result["retryOptions"] = options if options and len(options) >= 3 else None
+        result["retryResponseType"] = "single_choice"
     return result
 
 
@@ -364,6 +444,23 @@ def compact_study_plan_schema(request: StudyPlanRequest) -> dict:
     }
 
 
+def learner_stage_prompt(raw_prompt: Any, kind: str, topic_label: str) -> str:
+    """Return a usable learner prompt when a provider emits an empty placeholder."""
+    candidate = " ".join(str(raw_prompt or "").split()).strip()
+    if len(candidate) >= 5:
+        return candidate[:700]
+    topic = " ".join(str(topic_label or "this topic").split()).strip()[:180] or "this topic"
+    prompts = {
+        "definition": f"In your own words, define {topic} and state its main purpose.",
+        "mcq": f"Which statement best explains {topic}?",
+        "formula": f"Write the key formula or relationship used for {topic}, and define its symbols.",
+        "diagram": f"Draw or describe the main block diagram for {topic} and explain the signal flow.",
+        "numerical": f"Apply {topic} to a worked numerical example and show your steps.",
+        "teach_back": f"Teach {topic} back in your own words, including the key relationship and one example.",
+    }
+    return prompts.get(kind, f"Explain {topic} and show how you would apply it.")
+
+
 def normalize_live_study_plan(plan: dict, request: StudyPlanRequest) -> dict:
     """Normalize provider-shaped instructional metadata without adding lesson facts."""
     if not isinstance(plan.get("recordVersion"), int) or plan.get("recordVersion", 0) < 1:
@@ -422,11 +519,13 @@ def normalize_live_study_plan(plan: dict, request: StudyPlanRequest) -> dict:
             raw_kind = stage.get("kind") or stage.get("stageKind") or stage.get("type")
             raw_prompt = stage.get("prompt") or stage.get("stem") or stage.get("question")
             raw_source_anchors = stage.get("sourceAnchorIds") or stage.get("sourceAnchors")
+            stage_kind = str(raw_kind or "teach_back")
+            topic_label = str(scene.get("title") or scene["explanation"] or "this topic").strip()
             normalized_stages.append({
                 "stageId": str(stage.get("stageId") or stage.get("id") or f"{scene.get('sceneId', 'topic')}-stage-{index + 1}"),
-                "kind": str(raw_kind or "teach_back"),
+                "kind": stage_kind,
                 "title": str(stage.get("title") or stage.get("kind") or "Check your understanding"),
-                "prompt": str(raw_prompt or scene["explanation"] or scene["title"]),
+                "prompt": learner_stage_prompt(raw_prompt, stage_kind, topic_label),
                 "responseType": str(stage.get("responseType") or ("single_choice" if options else "long_text")),
                 "options": options,
                 "sourceAnchorIds": list(raw_source_anchors or scene.get("sourceAnchorIds") or []),
@@ -624,6 +723,38 @@ class LLMProvider:
 def _contains(text: str, *terms: str) -> bool:
     lowered = text.lower()
     return any(term in lowered for term in terms)
+
+
+def source_numbered_sections(source_spans: list[dict]) -> list[dict]:
+    """Return distinct numbered source sections in source order."""
+    section_pattern = re.compile(r"(?<![\w.])(\d+(?:\.\d+)+)(?=\s|[.)\-:])")
+    sections: list[dict] = []
+    seen: set[str] = set()
+    for span in source_spans:
+        if not isinstance(span, dict):
+            continue
+        locator = span.get("locator") if isinstance(span.get("locator"), dict) else {}
+        text = str(span.get("text") or "").strip()
+        candidates = [str(locator.get("section"))] if locator.get("section") else [match.group(1) for match in section_pattern.finditer(text)]
+        for label in candidates:
+            if not label or label in seen:
+                continue
+            seen.add(label)
+            sections.append({
+                "label": label,
+                "candidateId": str(span.get("candidateId") or ""),
+                "text": text[:1100],
+            })
+    return sections
+
+
+def scene_covers_section(scene: dict, section: dict) -> bool:
+    label = str(section.get("label") or "")
+    haystack = " ".join(str(scene.get(key) or "") for key in ("title", "conceptId", "explanation"))
+    if label and re.search(rf"(?<![\w.]){re.escape(label)}(?![\w.])", haystack):
+        return True
+    candidate_id = str(section.get("candidateId") or "")
+    return bool(candidate_id and candidate_id in {str(anchor) for anchor in scene.get("sourceAnchorIds", [])})
 
 
 class FixtureProvider(LLMProvider):
@@ -1188,11 +1319,32 @@ class FireworksProvider(LLMProvider):
             if isinstance(span, dict) and span.get("candidateId")
         ]
         source_context = json.dumps(compact_spans[:40], ensure_ascii=False)[:20000]
+        guided_mode = not any(str(span.get("sourceKind") or "") not in {"guided_context"} for span in request.source_spans if isinstance(span, dict))
+        goal_labels = {
+            "course": "learn a course or subject",
+            "skill": "build a reusable skill",
+            "interview": "prepare for an interview",
+            "viva": "practice a lab viva or oral exam",
+        }
+        focus_labels = {
+            "mastery": "balanced understanding and transfer",
+            "mock_test": "timed mock-test performance",
+            "conversation": "spoken response quality and follow-up questions",
+            "viva": "oral reasoning, precision, and confidence under probing",
+        }
+        grounding_instruction = (
+            "No learner documents were uploaded. Use broadly accepted general knowledge for this guided practice module, clearly label it as general practice, and do not invent citations or pretend that a source was provided."
+            if guided_mode else
+            "Use only the supplied source candidates for factual claims and keep every topic anchored to its own source section."
+        )
         instruction = (
             f"Build a complete first learning module for subject '{request.subject_title or request.subject_id}'. "
+            f"The learner's goal is to {goal_labels.get(request.learning_goal, 'learn the selected subject')}; current level is {request.skill_level}; assessment focus is {focus_labels.get(request.assessment_focus, 'balanced understanding and transfer')}. "
+            f"Target outcome: {request.goal_brief or 'not specified; infer a practical outcome from the selected goal'}. "
             f"Chapter selection: {request.chapter_selection}. Source pack IDs: {request.source_ids}. "
             f"Only these source anchor IDs may be used: {allowed_anchor_ids}. "
-            "Return one topic scene per numbered section or subsection found in the source, preserving ascending source order. If the source has sections such as 1.1, 1.2, and 1.3, return those as separate topics and begin each title with the exact section label. Do not merge 1.1, 1.2, and 1.3 into one broad concept and do not invent extra topics. "
+            f"{grounding_instruction} "
+            "Return one topic scene per numbered section or subsection found in the source, preserving ascending source order. If there is no uploaded source, return a sensible progression of 3-6 foundational topics for the requested skill or interview/viva goal. If the source has sections such as 1.1, 1.2, and 1.3, return those as separate topics and begin each title with the exact section label. Do not merge 1.1, 1.2, and 1.3 into one broad concept and do not invent extra topics. "
             "Do not make the scenes generic lesson headings: each topic must teach and test one concrete idea from its own section. "
             "Every topic scene must have exactly four stages in this order: definition, mcq, one application stage whose kind is formula, diagram, or numerical, and teach_back. "
             "The definition stage explains the topic and uses responseType none. The mcq stage must test a specific idea from that section, use exactly 3 or 4 plausible text options, use responseType single_choice, and include distractors based on realistic misconceptions rather than vague or trivially wrong choices. Never include answer keys or isCorrect fields. "
@@ -1222,6 +1374,57 @@ class FireworksProvider(LLMProvider):
             raise ProviderOutputError("Fireworks returned an incomplete study manifest")
         result = normalize_live_study_plan(raw_result, request)
         result.setdefault("scenes", [])
+
+        # A page-level source candidate can contain several numbered sections.
+        # Make section coverage explicit before accepting the manifest: prefix
+        # titles with the source label, and ask for a focused scene only when a
+        # numbered section is genuinely absent.
+        expected_sections = source_numbered_sections(request.source_spans)
+        if len(expected_sections) >= 2:
+            section_repair_schema = study_plan_schema(request)["properties"]["scenes"]["items"]
+            missing_sections: list[dict] = []
+            for section in expected_sections:
+                matching_scene = next((scene for scene in result["scenes"] if isinstance(scene, dict) and scene_covers_section(scene, section)), None)
+                label = str(section.get("label") or "")
+                if matching_scene is None:
+                    missing_sections.append(section)
+                    continue
+                title = str(matching_scene.get("title") or "").strip()
+                if label and not re.search(rf"(?<![\w.]){re.escape(label)}(?![\w.])", title):
+                    matching_scene["title"] = f"{label} - {title or 'Source section'}"
+            for section in missing_sections[: max(0, 12 - len(result["scenes"]))]:
+                label = str(section.get("label") or "section")
+                repair_instruction = (
+                    f"Return exactly one complete learner topic scene for source section {label}. "
+                    f"The title MUST begin with the exact label {label}. Do not merge this section with another section. "
+                    "Include the substantial explanation, key points, common mistakes, whiteboard actions, and exactly four stages: definition, mcq, one formula/diagram/numerical application, and teach_back. "
+                    f"Use only approved source anchor IDs {allowed_anchor_ids}. Source section candidate: {section.get('text', '')}"
+                )
+                try:
+                    repaired = self._chat_json(repair_instruction, f"study_section_{label.replace('.', '_')}", section_repair_schema)
+                    repaired_plan = normalize_live_study_plan({"scenes": [repaired]}, request)
+                    repaired_scenes = repaired_plan.get("scenes") or []
+                    if not repaired_scenes:
+                        continue
+                    repaired_scene = repaired_scenes[0]
+                    repaired_scene["title"] = f"{label} - {str(repaired_scene.get('title') or 'Source section').removeprefix(label).lstrip(' ·-:')}"
+                    repaired_anchors = list(repaired_scene.get("sourceAnchorIds") or [])
+                    if not repaired_anchors and section.get("candidateId"):
+                        repaired_anchors = [str(section["candidateId"])]
+                    if not repaired_anchors:
+                        repaired_anchors = allowed_anchor_ids[:1]
+                    result["scenes"].append(repaired_scene)
+                    result.setdefault("outline", []).append({
+                        "conceptId": str(repaired_scene.get("conceptId") or f"section-{label}"),
+                        "title": repaired_scene["title"],
+                        "objective": str(repaired_scene.get("explanation") or "Understand and apply this source section."),
+                        "sourceAnchorIds": repaired_anchors,
+                    })
+                except (ProviderOutputError, KeyError, TypeError):
+                    continue
+            still_missing = [section["label"] for section in expected_sections if not any(isinstance(scene, dict) and scene_covers_section(scene, section) for scene in result["scenes"])]
+            if still_missing:
+                raise ProviderOutputError(f"source sections are missing from the generated module: {', '.join(still_missing)}")
         missing = missing_required_scene_types(result)
         if missing and any(scene.get("stages") for scene in result.get("scenes", []) if isinstance(scene, dict)):
             # Qwen can satisfy the top-level manifest schema while dropping one

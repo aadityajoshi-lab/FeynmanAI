@@ -84,6 +84,34 @@ def test_incorrect_checkpoint_can_return_a_safe_similar_mcq():
     assert all("isCorrect" not in option for option in result["retryOptions"])
 
 
+def test_degraded_checkpoint_feedback_is_repaired_for_the_learner():
+    from teachback.providers import normalize_checkpoint_feedback
+
+    result = normalize_checkpoint_feedback(
+        {"correct": False, "feedback": "T", "mistake": "T", "correctAnswer": "T", "correction": "T", "remediation": "R"},
+        {
+            "stageKind": "mcq",
+            "prompt": "What is the purpose of the secondary element?",
+            "stage": {
+                "kind": "mcq",
+                "prompt": "What is the purpose of the secondary element?",
+                "options": [
+                    "To display the final readable result.",
+                    "To amplify or filter a weak electrical signal.",
+                    "To compare the unknown quantity with a standard.",
+                ],
+            },
+            "sourceSpans": [{"text": "The secondary element amplifies or filters the weak signal from the primary element."}],
+        },
+        "To display the final readable result.",
+    )
+
+    assert len(result["mistake"]) > 18
+    assert result["correctAnswer"] == "To amplify or filter a weak electrical signal."
+    assert len(result["correction"]) > 18
+    assert len(result["remediation"]) > 18
+
+
 def test_provider_json_preserves_absurd_integer_tokens_as_text():
     from teachback.providers import load_provider_json
 
@@ -134,6 +162,34 @@ def test_normalizer_keeps_one_canonical_four_stage_ladder():
     )
 
     assert [stage["kind"] for stage in result["scenes"][0]["stages"]] == ["definition", "mcq", "formula", "teach_back"]
+
+
+def test_normalizer_repairs_short_placeholder_stage_prompts():
+    from teachback.providers import StudyPlanRequest, normalize_live_study_plan
+
+    result = normalize_live_study_plan(
+        {
+            "recordVersion": 1,
+            "scenes": [{
+                "sceneId": "topic-1",
+                "title": "1.1 Introduction to instrumentation",
+                "explanation": "An instrumentation system measures a physical quantity and produces a usable signal.",
+                "stages": [
+                    {"kind": "definition", "prompt": "T"},
+                    {"kind": "mcq", "prompt": "", "options": ["A", "B", "C"]},
+                    {"kind": "formula", "prompt": "Apply"},
+                    {"kind": "teach_back", "prompt": None},
+                ],
+            }],
+        },
+        StudyPlanRequest("instrumentation", "chapter-1", ["source"], "chapter_1", ["anchor"]),
+    )
+
+    prompts = [stage["prompt"] for stage in result["scenes"][0]["stages"]]
+    assert all(len(prompt.strip()) >= 5 for prompt in prompts)
+    assert "define" in prompts[0].lower()
+    assert "best explains" in prompts[1].lower()
+    assert "teach" in prompts[3].lower()
 
 
 def test_staged_manifest_marks_unstaged_topics_for_repair():

@@ -44,6 +44,8 @@ _MIME_SIGNATURES = {
     "audio/webm": lambda payload: payload.startswith(b"\x1a\x45\xdf\xa3"),
 }
 
+_NUMBERED_SECTION_MARKER = re.compile(r"(?<![\w.])(\d+(?:\.\d+)+)(?=\s|[.)\-:])")
+
 
 class IngestionError(ValueError):
     """Raised when an authoring asset cannot be safely inspected."""
@@ -190,10 +192,32 @@ def extract_pdf_candidates_from_bytes(payload: bytes, *, sha256: str) -> list[Ca
                 extracted = page.extract_text() or ""
             text = normalize_extracted_text(extracted)
             if text:
-                spans.append(CandidateSpan(text=text, locator={"kind": "pdf-page", "page": page_number, "sha256": sha256}))
+                sections = split_numbered_sections(text, page_number=page_number, sha256=sha256)
+                spans.extend(sections or [CandidateSpan(text=text, locator={"kind": "pdf-page", "page": page_number, "sha256": sha256})])
         return spans
     except Exception as exc:
         raise IngestionError("unable to extract PDF text") from exc
+
+
+def split_numbered_sections(text: str, *, page_number: int, sha256: str) -> list[CandidateSpan]:
+    """Keep numbered textbook sections separate when a page contains many of them."""
+    matches = list(_NUMBERED_SECTION_MARKER.finditer(text))
+    if len(matches) < 2:
+        return []
+    sections: list[CandidateSpan] = []
+    for index, match in enumerate(matches):
+        start = match.start()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        section_text = " ".join(text[start:end].split()).strip()
+        # Ignore incidental numeric references; a real section candidate has
+        # enough explanatory text to support a learner-facing topic.
+        if len(section_text) < 70:
+            continue
+        sections.append(CandidateSpan(
+            text=section_text,
+            locator={"kind": "pdf-section", "page": page_number, "section": match.group(1), "sha256": sha256},
+        ))
+    return sections
 
 
 def media_pipeline_states() -> tuple[str, ...]:
