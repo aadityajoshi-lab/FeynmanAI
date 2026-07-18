@@ -89,6 +89,8 @@ class StudySourceIngestView(APIView):
         module_id = str(body.get("moduleId") or "").strip()[:120]
         source_id = f"upload_{uuid.uuid4().hex}"
         asset_kind = _asset_kind(metadata.mime_type)
+        requested_source_kind = str(body.get("sourceKind") or "").strip()[:32]
+        source_kind = requested_source_kind if requested_source_kind in {"notes", "past_questions"} else asset_kind
         pipeline = {
             "state": "awaiting_approval",
             "steps": [
@@ -103,7 +105,7 @@ class StudySourceIngestView(APIView):
             title=title or metadata.filename,
             subject_id=subject_id,
             module_id=module_id,
-            source_kind=asset_kind,
+            source_kind=source_kind,
             filename=metadata.filename,
             mime_type=metadata.mime_type,
             size_bytes=metadata.size_bytes,
@@ -121,6 +123,7 @@ class StudySourceIngestView(APIView):
                 "subjectId": subject_id or None,
                 "moduleId": module_id or None,
                 "assetKind": asset_kind,
+                "sourceKind": source_kind,
                 "filename": metadata.filename,
                 "mimeType": metadata.mime_type,
                 "sizeBytes": metadata.size_bytes,

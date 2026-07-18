@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { studyModes } from "@/lib/learningModes";
-import { chatWithStudyPlan, interactWithStudyPlan, StudyChatMessage, StudyChatResponse, StudyInteractionResponse, StudyPlanResponse, StudyScene } from "@/lib/studyApi";
+import { chatWithStudyPlan, interactWithStudyPlan, StudyChatMessage, StudyChatResponse, StudyInteractionResponse, StudyPlanResponse, StudyScene, StudyStage } from "@/lib/studyApi";
 import type { StudyAsset } from "@/lib/studyTypes";
 
 type StudyDraft = {
@@ -38,6 +38,8 @@ function PayloadView({ payload }: { payload: Record<string, unknown> }) {
 function GeneratedVisual({ config }: { config?: Record<string, unknown> }) {
   const source = config || {};
   const rawPoints = Array.isArray(source.points) ? source.points : [];
+  const rawNodes = Array.isArray(source.nodes) ? source.nodes : [];
+  const rawEdges = Array.isArray(source.edges) ? source.edges : [];
   const points = rawPoints.map((point) => {
     if (!point || typeof point !== "object") return null;
     const candidate = point as Record<string, unknown>;
@@ -56,7 +58,7 @@ function GeneratedVisual({ config }: { config?: Record<string, unknown> }) {
 
   return <div className="study-generated-visual" aria-label={title}>
     <div className="study-board-head"><div><span className="study-board-label">{typeof source.dimension === "string" ? source.dimension : "GENERATED VISUAL"}</span><strong>{title}</strong></div><span className="study-status">model manifest</span></div>
-    {points.length >= 2 ? <svg viewBox="0 0 500 170" className="study-signal-svg" role="img" aria-label={title}><line x1="24" y1="142" x2="476" y2="142" className="study-axis" /><line x1="24" y1="30" x2="24" y2="142" className="study-axis" /><polyline points={polyline} className="study-sampled-line" />{points.map((point, index) => <circle key={`${point.x}-${point.y}-${index}`} cx={24 + ((point.x - minX) / rangeX) * 452} cy={142 - ((point.y - minY) / rangeY) * 112} r="3" className="study-sample-point" />)}</svg> : <PayloadView payload={source} />}
+    {points.length >= 2 ? <svg viewBox="0 0 500 170" className="study-signal-svg" role="img" aria-label={title}><line x1="24" y1="142" x2="476" y2="142" className="study-axis" /><line x1="24" y1="30" x2="24" y2="142" className="study-axis" /><polyline points={polyline} className="study-sampled-line" />{points.map((point, index) => <circle key={`${point.x}-${point.y}-${index}`} cx={24 + ((point.x - minX) / rangeX) * 452} cy={142 - ((point.y - minY) / rangeY) * 112} r="3" className="study-sample-point" />)}</svg> : rawNodes.length ? <div className="study-diagram-flow">{rawNodes.map((node, index) => { const item = node && typeof node === "object" ? node as Record<string, unknown> : {}; return <div className="study-diagram-node" key={String(item.id || item.label || index)}><strong>{String(item.label || item.title || item.id || `Step ${index + 1}`)}</strong>{item.description ? <span>{String(item.description)}</span> : null}</div>; })}<ul>{rawEdges.map((edge, index) => <li key={index}>{typeof edge === "string" ? edge : JSON.stringify(edge)}</li>)}</ul></div> : <PayloadView payload={source} />}
   </div>;
 }
 
@@ -69,12 +71,75 @@ function sceneInteractionKind(scene: StudyScene): "predict" | "retrieval" | "tea
   return null;
 }
 
+function stagesForScene(scene: StudyScene): StudyStage[] {
+  const cleanOptions = (options?: unknown): string[] | null => {
+    if (options && !Array.isArray(options) && typeof options === "object") {
+      const container = options as unknown as Record<string, unknown>;
+      options = (container.items || container.choices || container.values) as unknown[] | null;
+    }
+    if (!Array.isArray(options)) return null;
+    const values = options.map((option) => {
+      if (option && typeof option === "object") {
+        const item = option as Record<string, unknown>;
+        return item.text ?? item.label ?? item.value ?? item.stem ?? item.option;
+      }
+      return option;
+    }).filter((option): option is string | number => typeof option === "string" || typeof option === "number");
+    return values.length ? values.map(String) : null;
+  };
+  if (scene.stages?.length) return scene.stages.map((rawStage) => {
+    const stage = rawStage as StudyStage & Record<string, unknown>;
+    const options = cleanOptions(stage.options || stage.choices);
+    return {
+      ...stage,
+      stageId: String(stage.stageId || stage.id || `${scene.sceneId}-stage`),
+      kind: (stage.kind || stage.stageKind || stage.type || "teach_back") as StudyStage["kind"],
+      title: String(stage.title || stage.kind || "Check your understanding"),
+      prompt: String(stage.prompt || stage.stem || stage.question || scene.explanation || scene.title),
+      responseType: (stage.responseType || (options ? "single_choice" : "long_text")) as StudyStage["responseType"],
+      options,
+      sourceAnchorIds: (stage.sourceAnchorIds || stage.sourceAnchors || scene.sourceAnchorIds) as string[],
+    };
+  });
+  if (!scene.checkpoint) return [];
+  return [{
+    stageId: `${scene.sceneId}-stage-1`,
+    kind: scene.checkpoint.kind === "predict" ? "mcq" : "teach_back",
+    title: scene.checkpoint.kind.replace("_", " "),
+    prompt: scene.checkpoint.prompt,
+    responseType: scene.checkpoint.responseType,
+    options: cleanOptions(scene.checkpoint.options),
+    sourceAnchorIds: scene.checkpoint.sourceAnchorIds,
+  }];
+}
+
+function fileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("The answer file could not be read."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function sceneUnderstandingScore(scene: StudyScene, results: Record<string, StudyInteractionResponse>): number | null {
+  const scores = stagesForScene(scene)
+    .map((stage) => results[stage.stageId]?.understandingScore)
+    .filter((score): score is number => typeof score === "number");
+  return scores.length ? Math.round(scores.reduce((total, score) => total + score, 0) / scores.length) : null;
+}
+
 export default function StudyWorkspace() {
   const [draft, setDraft] = useState<StudyDraft | null>(null);
   const [activeSceneIndex, setActiveSceneIndex] = useState(0);
+  const [activeStageIndex, setActiveStageIndex] = useState<Record<string, number>>({});
   const [visibleActions, setVisibleActions] = useState<Record<string, number>>({});
   const [responses, setResponses] = useState<Record<string, string>>({});
+  const [confidence, setConfidence] = useState<Record<string, number>>({});
+  const [attachments, setAttachments] = useState<Record<string, { name: string; mimeType: string; dataUrl: string }>>({});
   const [interactionResults, setInteractionResults] = useState<Record<string, StudyInteractionResponse>>({});
+  const [retryStages, setRetryStages] = useState<Record<string, StudyStage>>({});
+  const [reviewAccepted, setReviewAccepted] = useState<Record<string, boolean>>({});
   const [loadingInteractions, setLoadingInteractions] = useState<Record<string, boolean>>({});
   const [visualizationOpen, setVisualizationOpen] = useState<Record<string, boolean>>({});
   const [chatMessages, setChatMessages] = useState<ChatUiMessage[]>([]);
@@ -94,9 +159,82 @@ export default function StudyWorkspace() {
 
   const scenes = draft?.plan?.scenes ?? [];
   const activeScene = scenes[activeSceneIndex] as StudyScene | undefined;
+  const activeStages = activeScene ? stagesForScene(activeScene) : [];
+  const currentStageIndex = activeScene ? Math.min(activeStageIndex[activeScene.sceneId] ?? 0, Math.max(activeStages.length - 1, 0)) : 0;
+  const baseActiveStage = activeStages[currentStageIndex];
+  const activeStage = baseActiveStage ? retryStages[baseActiveStage.stageId] ?? baseActiveStage : undefined;
   const activeOutline = draft?.plan?.outline?.find((item) => item.conceptId === activeScene?.conceptId);
   const learningMode = draft?.learningMode ?? studyModes[0].id;
   const mode = useMemo(() => studyModes.find((item) => item.id === learningMode) ?? studyModes[0], [learningMode]);
+
+  useEffect(() => {
+    if (!activeScene?.sceneId || visibleActions[activeScene.sceneId] !== undefined) return;
+    setVisibleActions((current) => ({ ...current, [activeScene.sceneId]: Math.min(1, activeScene.actions?.length ?? 0) }));
+  }, [activeScene?.sceneId]);
+
+  function topicUnlocked(index: number) {
+    if (index === 0) return true;
+    return scenes.slice(0, index).every((scene) => {
+      const stages = stagesForScene(scene);
+      const finalStage = stages[stages.length - 1];
+      return !finalStage || interactionResults[finalStage.stageId]?.correct === true;
+    });
+  }
+
+  const activeTopicComplete = !activeStages.length || interactionResults[activeStages[activeStages.length - 1].stageId]?.correct === true;
+
+  function stageCleared(stageId: string) {
+    return interactionResults[stageId]?.correct === true || reviewAccepted[stageId] === true;
+  }
+
+  function retryStage(stageId: string) {
+    setInteractionResults((current) => {
+      const next = { ...current };
+      delete next[stageId];
+      return next;
+    });
+    setResponses((current) => {
+      const next = { ...current };
+      delete next[stageId];
+      return next;
+    });
+    setAttachments((current) => {
+      const next = { ...current };
+      delete next[stageId];
+      return next;
+    });
+    setReviewAccepted((current) => {
+      const next = { ...current };
+      delete next[stageId];
+      return next;
+    });
+  }
+
+  function startSimilarRetry(stage: StudyStage, result: StudyInteractionResponse) {
+    if (!result.retryPrompt) {
+      retryStage(stage.stageId);
+      return;
+    }
+    const retryStageData: StudyStage = {
+      ...stage,
+      title: `Similar check: ${stage.title}`,
+      prompt: result.retryPrompt,
+      options: result.retryOptions ?? null,
+      responseType: result.retryResponseType ?? stage.responseType,
+      sourceAnchorIds: result.retrySourceAnchorIds?.length ? result.retrySourceAnchorIds : stage.sourceAnchorIds,
+    };
+    setRetryStages((current) => ({ ...current, [stage.stageId]: retryStageData }));
+    retryStage(stage.stageId);
+  }
+
+  function continueAfterReview(scene: StudyScene, stage: StudyStage) {
+    const stages = stagesForScene(scene);
+    const stageIndex = stages.findIndex((candidate) => candidate.stageId === stage.stageId);
+    if (stageIndex < 0 || stageIndex >= stages.length - 1) return;
+    setReviewAccepted((current) => ({ ...current, [stage.stageId]: true }));
+    setActiveStageIndex((current) => ({ ...current, [scene.sceneId]: stageIndex + 1 }));
+    window.setTimeout(() => document.getElementById(`checkpoint-${scene.sceneId}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
+  }
 
   function setMode(value: string) {
     setDraft((current) => {
@@ -111,42 +249,80 @@ export default function StudyWorkspace() {
     setVisibleActions((current) => ({ ...current, [scene.sceneId]: Math.min((current[scene.sceneId] ?? 0) + 1, scene.actions?.length ?? 0) }));
   }
 
+  function startNextStage(scene: StudyScene, nextIndex: number) {
+    setActiveStageIndex((current) => ({ ...current, [scene.sceneId]: nextIndex }));
+    window.setTimeout(() => document.getElementById(`checkpoint-${scene.sceneId}`)?.scrollIntoView({ behavior: "smooth", block: "center" }), 0);
+  }
+
   async function submitInteraction(scene: StudyScene) {
     if (!draft?.plan?.sourceIds?.length) return;
-    const kind = sceneInteractionKind(scene);
-    const response = responses[scene.sceneId]?.trim();
-    if (!kind || !response) return;
-    setLoadingInteractions((current) => ({ ...current, [scene.sceneId]: true }));
+    const stages = stagesForScene(scene);
+    const stageIndex = Math.min(activeStageIndex[scene.sceneId] ?? 0, Math.max(stages.length - 1, 0));
+    const baseStage = stages[stageIndex];
+    const stage = baseStage ? retryStages[baseStage.stageId] ?? baseStage : undefined;
+    if (!stage || stage.kind === "definition") return;
+    const kind = stage.kind === "mcq" ? "mcq" : stage.kind;
+    const response = responses[stage.stageId]?.trim() || (attachments[stage.stageId] ? `Uploaded answer: ${attachments[stage.stageId].name}` : "");
+    if (!response) return;
+    setLoadingInteractions((current) => ({ ...current, [stage.stageId]: true }));
     setError("");
     try {
-      const checkpoint = scene.checkpoint;
       const result = await interactWithStudyPlan({
         sourceIds: draft.plan.sourceIds,
         provider: draft.provider ?? "fireworks",
         kind,
         response,
+        confidence: confidence[stage.stageId] ?? 3,
+        attachment: attachments[stage.stageId] ?? null,
         scene: {
           sceneId: scene.sceneId,
-          prompt: checkpoint?.prompt ?? scene.explanation ?? scene.title,
+          prompt: stage.prompt,
           explanation: scene.explanation,
-          responseType: checkpoint?.responseType ?? "long_text",
-          sourceAnchorIds: scene.sourceAnchorIds,
+          responseType: stage.responseType,
+          sourceAnchorIds: stage.sourceAnchorIds,
+          stage,
         },
       });
-      setInteractionResults((current) => ({ ...current, [scene.sceneId]: result }));
+      setInteractionResults((current) => ({ ...current, [stage.stageId]: result }));
+      if (result.nextAction === "advance" || result.correct === true) {
+        const nextStageIndex = stageIndex + 1;
+        if (nextStageIndex < stages.length) {
+          setActiveStageIndex((current) => ({ ...current, [scene.sceneId]: nextStageIndex }));
+        } else if (activeSceneIndex < scenes.length - 1) {
+          setActiveSceneIndex((current) => current + 1);
+        }
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The live checkpoint could not be evaluated.");
     } finally {
-      setLoadingInteractions((current) => ({ ...current, [scene.sceneId]: false }));
+      setLoadingInteractions((current) => ({ ...current, [stage.stageId]: false }));
+    }
+  }
+
+  async function handleAttachment(stage: StudyStage, file: File | undefined) {
+    if (!file) return;
+    if (file.size > 4 * 1024 * 1024) {
+      setError("Answer uploads must be smaller than 4 MB.");
+      return;
+    }
+    try {
+      const dataUrl = await fileAsDataUrl(file);
+      setAttachments((current) => ({ ...current, [stage.stageId]: { name: file.name, mimeType: file.type, dataUrl } }));
+      setError("");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The answer file could not be read.");
     }
   }
 
   function applyChatAction(action: StudyChatResponse["action"]) {
     if (!action) return;
     const targetIndex = action.sceneId ? scenes.findIndex((scene) => scene.sceneId === action.sceneId) : -1;
-    if (action.kind === "next_scene") setActiveSceneIndex((current) => Math.min(Math.max(scenes.length - 1, 0), targetIndex >= 0 ? targetIndex : current + 1));
+    if (action.kind === "next_scene") setActiveSceneIndex((current) => {
+      const nextIndex = Math.min(Math.max(scenes.length - 1, 0), targetIndex >= 0 ? targetIndex : current + 1);
+      return topicUnlocked(nextIndex) ? nextIndex : current;
+    });
     if (action.kind === "previous_scene") setActiveSceneIndex((current) => Math.max(0, targetIndex >= 0 ? targetIndex : current - 1));
-    if (["open_scene", "focus_checkpoint", "show_visualization", "repeat_explanation"].includes(action.kind) && targetIndex >= 0) setActiveSceneIndex(targetIndex);
+    if (["open_scene", "focus_checkpoint", "show_visualization", "repeat_explanation"].includes(action.kind) && targetIndex >= 0) setActiveSceneIndex((current) => topicUnlocked(targetIndex) ? targetIndex : current);
     if (action.kind === "show_visualization" && targetIndex >= 0) setVisualizationOpen((current) => ({ ...current, [scenes[targetIndex].sceneId]: true }));
     if (action.kind === "repeat_explanation" && targetIndex >= 0) setVisibleActions((current) => ({ ...current, [scenes[targetIndex].sceneId]: Math.max(current[scenes[targetIndex].sceneId] ?? 0, 1) }));
     if (action.kind === "set_learning_mode" && action.modeId) setMode(action.modeId);
@@ -180,7 +356,7 @@ export default function StudyWorkspace() {
           title: scene.title,
           type: scene.type,
           hasVisualization: Boolean(scene.config && Object.keys(scene.config).length > 0),
-          hasCheckpoint: Boolean(scene.checkpoint),
+          hasCheckpoint: Boolean(scene.checkpoint || scene.stages?.length),
         })),
       });
       setChatMessages((current) => [...current, { role: "assistant", content: result.reply, response: result }]);
@@ -210,7 +386,7 @@ export default function StudyWorkspace() {
         <h1>{draft.chapterTitle || "Learning path"}</h1>
         <p className="study-outline-note">Every step below comes from the generated manifest. Open one scene, act on it, then explain what changed.</p>
         <ol className="study-step-list">
-          {scenes.map((scene, index) => <li key={scene.sceneId} className={activeSceneIndex === index ? "active" : ""}><button type="button" onClick={() => setActiveSceneIndex(index)}><span>{String(index + 1).padStart(2, "0")}</span><strong>{scene.title}</strong></button></li>)}
+          {scenes.map((scene, index) => { const score = sceneUnderstandingScore(scene, interactionResults); return <li key={scene.sceneId} className={activeSceneIndex === index ? "active" : ""}><button type="button" disabled={!topicUnlocked(index)} onClick={() => setActiveSceneIndex(index)}><span>{String(index + 1).padStart(2, "0")}</span><strong>{scene.title}</strong><small>{score === null ? "not started" : `understanding ${score}%`} · {stagesForScene(scene).length} stages</small></button></li>; })}
         </ol>
         <div className="study-material-note"><span className="study-kicker">SOURCE MATERIAL</span><ul>{(draft.assets ?? []).map((asset) => <li key={asset.id}>{asset.name}</li>)}</ul><small>Source anchors are server-owned. Uploaded content remains reviewable until approval.</small></div>
       </aside>
@@ -220,16 +396,32 @@ export default function StudyWorkspace() {
         {error && <div className="study-form-error" role="alert">{error}</div>}
         {!activeScene && <section className="study-generated-module"><h2>The provider returned no learner scenes.</h2><p>Retry the module build so the source pack can produce a complete manifest.</p></section>}
         {activeScene && <>
-          <div className="study-desk-title-row"><div><p className="study-kicker">SCENE {activeSceneIndex + 1} / {activeScene.type}</p><h2>{activeScene.title}</h2><p>{activeScene.explanation || activeOutline?.objective || "This scene did not return an explanation body."}</p></div><span className="study-step-count">{activeSceneIndex + 1} of {scenes.length}</span></div>
+          <div className="study-desk-title-row"><div><p className="study-kicker">TOPIC {activeSceneIndex + 1} / {activeStage ? `STAGE ${currentStageIndex + 1} OF ${activeStages.length}` : activeScene.type}</p><h2>{activeScene.title}</h2><p>{activeStage?.kind === "definition" ? activeScene.explanation : activeStage?.prompt || activeScene.explanation || activeOutline?.objective || "This scene did not return an explanation body."}</p></div><span className="study-step-count">{activeSceneIndex + 1} of {scenes.length}</span></div>
 
           {activeOutline && <section className="study-generated-module" aria-label="Concept objective"><div className="study-generated-heading"><div><span className="study-board-label">CONCEPT OBJECTIVE</span><h2>{activeOutline.title}</h2><p>{activeOutline.objective}</p></div><span className="study-runtime-label">{activeScene.sourceAnchorIds.length} source anchors</span></div></section>}
 
-          {visualizationOpen[activeScene.sceneId] && activeScene.config && Object.keys(activeScene.config).length > 0 && <GeneratedVisual config={activeScene.config} />}
+          {(activeScene.keyPoints?.length || activeScene.workedExample || activeScene.commonMistakes?.length) ? <section className="study-content-pack" aria-label="Complete topic explanation">
+            {activeScene.keyPoints?.length ? <div><span className="study-board-label">KEY IDEAS</span><ul>{activeScene.keyPoints.map((point) => <li key={point}>{point}</li>)}</ul></div> : null}
+            {activeScene.workedExample ? <div className="study-worked-example"><span className="study-board-label">WORKED EXAMPLE</span><p>{activeScene.workedExample}</p></div> : null}
+            {activeScene.commonMistakes?.length ? <div className="study-common-mistakes"><span className="study-board-label">COMMON MISTAKES</span><ul>{activeScene.commonMistakes.map((mistake) => <li key={mistake}>{mistake}</li>)}</ul></div> : null}
+          </section> : null}
+
+          {draft.plan?.pastQuestionAnalysis?.length ? <section className="study-past-analysis" aria-label="Past question analysis"><span className="study-board-label">PAST QUESTION PATTERNS</span><p>The module used your past questions to target these recurring demands:</p><ul>{draft.plan.pastQuestionAnalysis.map((pattern) => <li key={pattern}>{pattern}</li>)}</ul></section> : null}
+
+          {activeStages.length > 0 && <nav className="study-stage-strip" aria-label="Topic understanding stages">{activeStages.map((stage, index) => <button key={stage.stageId} type="button" disabled={index > 0 && !stageCleared(activeStages[index - 1].stageId)} className={currentStageIndex === index ? "active" : ""} onClick={() => setActiveStageIndex((current) => ({ ...current, [activeScene.sceneId]: index }))}><span>{String(index + 1).padStart(2, "0")}</span><strong>{stage.title}</strong>{interactionResults[stage.stageId]?.correct && <em>passed</em>}{reviewAccepted[stage.stageId] && !interactionResults[stage.stageId]?.correct && <em>reviewed</em>}</button>)}</nav>}
+
+          {activeScene.config && Object.keys(activeScene.config).length > 0 && <section className="study-source-visual" aria-label="Source-grounded visual"><div className="study-board-head"><div><span className="study-board-label">SOURCE-GROUNDED VISUAL</span><strong>Model-authored representation for this topic</strong></div><span className="study-status">available</span></div><GeneratedVisual config={activeScene.config} /></section>}
 
           <section className="study-board" aria-label="Generated whiteboard actions"><div className="study-board-head"><div><span className="study-board-label">WHITEBOARD EXPLAINER</span><strong>Reveal the model-authored steps in order.</strong></div><span className="study-status">{activeScene.actions?.length ?? 0} actions</span></div><div className="study-action-list">{(activeScene.actions ?? []).slice(0, visibleActions[activeScene.sceneId] ?? 0).map((action) => <article key={action.actionId} className="study-action-card"><span className="study-board-label">{action.kind}</span><h3>{action.label}</h3><PayloadView payload={action.payload} /></article>)}</div>{(activeScene.actions?.length ?? 0) > (visibleActions[activeScene.sceneId] ?? 0) && <button className="study-solid-button" type="button" onClick={() => revealNext(activeScene)}>Reveal next action -&gt;</button>}{(activeScene.actions?.length ?? 0) === 0 && <p className="study-muted">No whiteboard actions were returned for this scene.</p>}</section>
 
-          {sceneInteractionKind(activeScene) && <section className="study-checkpoint" id={`checkpoint-${activeScene.sceneId}`}><div className="study-checkpoint-heading"><div><span className="study-board-label">{activeScene.checkpoint?.kind?.replace("_", " ") || activeScene.type}</span><h3>{activeScene.checkpoint?.prompt || activeScene.explanation || activeScene.title}</h3></div><span className="study-question-label">source-bounded checkpoint</span></div>{activeScene.checkpoint?.options?.length ? <div className="study-predictions" role="radiogroup" aria-label={activeScene.checkpoint.prompt}>{activeScene.checkpoint.options.map((option) => <label key={option} className={responses[activeScene.sceneId] === option ? "selected" : ""}><input type="radio" name={`response-${activeScene.sceneId}`} value={option} checked={responses[activeScene.sceneId] === option} onChange={() => setResponses((current) => ({ ...current, [activeScene.sceneId]: option }))} />{option}</label>)}</div> : <textarea className="study-interaction-textarea" value={responses[activeScene.sceneId] ?? ""} onChange={(event) => setResponses((current) => ({ ...current, [activeScene.sceneId]: event.target.value }))} placeholder="Write your response before asking the live provider to inspect it." aria-label={activeScene.checkpoint?.prompt || activeScene.title} maxLength={12000} />}
-            <div className="study-checkpoint-footer"><button className="study-solid-button" type="button" onClick={() => submitInteraction(activeScene)} disabled={!responses[activeScene.sceneId]?.trim() || loadingInteractions[activeScene.sceneId]}>{loadingInteractions[activeScene.sceneId] ? "Evaluating..." : "Check with the live provider"}</button>{interactionResults[activeScene.sceneId] && <InteractionResult result={interactionResults[activeScene.sceneId]} />}</div></section>}
+          {activeStage && activeStage.kind !== "definition" && <section className="study-checkpoint" id={`checkpoint-${activeScene.sceneId}`}>
+            <div className="study-checkpoint-heading"><div><span className="study-board-label">{activeStage.kind.replace("_", " ")}</span><h3>{activeStage.prompt}</h3><p className="study-stage-help">{activeStage.kind === "mcq" ? "Select one option. The answer key stays hidden until your response is evaluated." : "Write your reasoning or upload your handwritten work. The next stage unlocks after a correct response or after you review the correction."}</p></div><span className="study-question-label">level {currentStageIndex + 1} / source-bounded check</span></div>
+            {activeStage.options?.length ? <div className="study-predictions" role="radiogroup" aria-label={activeStage.prompt}>{activeStage.options.map((option) => <label key={option} className={responses[activeStage.stageId] === option ? "selected" : ""}><input type="radio" name={`response-${activeStage.stageId}`} value={option} checked={responses[activeStage.stageId] === option} onChange={() => setResponses((current) => ({ ...current, [activeStage.stageId]: option }))} />{option}</label>)}</div> : <textarea className="study-interaction-textarea" value={responses[activeStage.stageId] ?? ""} onChange={(event) => setResponses((current) => ({ ...current, [activeStage.stageId]: event.target.value }))} placeholder={activeStage.kind === "numerical" ? "Write the known values, formula, substitution, and final answer." : activeStage.kind === "formula" ? "Write the formula and define each symbol." : "Write your answer before asking the live provider to inspect it."} aria-label={activeStage.prompt} maxLength={12000} />}
+            {(activeStage.responseType === "file" || ["diagram", "formula", "numerical"].includes(activeStage.kind)) && <div className="study-answer-upload"><label htmlFor={`answer-file-${activeStage.stageId}`}>Upload a handwritten formula, solution, or block diagram <small>(PNG, JPG, WebP, or PDF; max 4 MB)</small></label><input id={`answer-file-${activeStage.stageId}`} type="file" accept="image/png,image/jpeg,image/webp,application/pdf" onChange={(event) => void handleAttachment(activeStage, event.target.files?.[0])} />{attachments[activeStage.stageId] && <small>Attached: {attachments[activeStage.stageId].name}</small>}</div>}
+            <div className="study-confidence-row"><label htmlFor={`confidence-${activeStage.stageId}`}>How confident are you?</label><select id={`confidence-${activeStage.stageId}`} value={confidence[activeStage.stageId] ?? 3} onChange={(event) => setConfidence((current) => ({ ...current, [activeStage.stageId]: Number(event.target.value) }))}><option value={1}>1 — guessing</option><option value={2}>2 — unsure</option><option value={3}>3 — somewhat sure</option><option value={4}>4 — confident</option><option value={5}>5 — very confident</option></select></div>
+            <div className="study-checkpoint-footer"><button className="study-solid-button" type="button" onClick={() => submitInteraction(activeScene)} disabled={(!responses[activeStage.stageId]?.trim() && !attachments[activeStage.stageId]) || loadingInteractions[activeStage.stageId]}>{loadingInteractions[activeStage.stageId] ? "Evaluating..." : "Check my understanding"}</button>{interactionResults[activeStage.stageId] && <InteractionResult result={interactionResults[activeStage.stageId]} canContinue={currentStageIndex < activeStages.length - 1} onSimilarRetry={() => startSimilarRetry(activeStage, interactionResults[activeStage.stageId])} onRetry={() => retryStage(activeStage.stageId)} onContinue={() => continueAfterReview(activeScene, activeStage)} />}</div>
+          </section>}
+          {activeStage?.kind === "definition" && <section className="study-checkpoint study-definition-step"><div className="study-checkpoint-heading"><div><span className="study-board-label">TOPIC DEFINITION</span><h3>Read the explanation, then start the first check.</h3><p className="study-stage-help">Writing and upload controls appear in the application stage. This step establishes the idea before the MCQ.</p></div><span className="study-question-label">understanding ladder</span></div><button className="study-solid-button" type="button" onClick={() => startNextStage(activeScene, currentStageIndex + 1)}>I understand — start the MCQ</button></section>}
         </>}
       </section>
 
@@ -253,14 +445,14 @@ export default function StudyWorkspace() {
           </form>
         </section>
         <div className="study-next-card"><span className="study-kicker">YOUR METHOD</span><label htmlFor="workspace-mode">Change anytime</label><select id="workspace-mode" className="study-select" value={learningMode} onChange={(event) => setMode(event.target.value)}>{studyModes.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select><p>{mode.description}</p></div>
-        <div className="study-next-card"><span className="study-kicker">PROGRESS</span><h3>{activeSceneIndex + 1} / {scenes.length || 0} scenes</h3><p>{activeScene ? `${activeScene.sourceAnchorIds.length} source anchors are attached to this scene.` : "No scene is active."}</p><div className="study-step-actions"><button className="study-outline-button" type="button" onClick={() => setActiveSceneIndex((current) => Math.max(0, current - 1))} disabled={activeSceneIndex === 0}>Previous</button><button className="study-solid-button" type="button" onClick={() => setActiveSceneIndex((current) => Math.min(Math.max(0, scenes.length - 1), current + 1))} disabled={activeSceneIndex >= scenes.length - 1}>Next -&gt;</button></div></div>
+        <div className="study-next-card"><span className="study-kicker">PROGRESS</span><h3>{activeSceneIndex + 1} / {scenes.length || 0} scenes</h3><p>{activeScene ? `${activeScene.sourceAnchorIds.length} source anchors are attached to this scene.` : "No scene is active."}</p><div className="study-step-actions"><button className="study-outline-button" type="button" onClick={() => setActiveSceneIndex((current) => Math.max(0, current - 1))} disabled={activeSceneIndex === 0}>Previous</button><button className="study-solid-button" type="button" onClick={() => setActiveSceneIndex((current) => Math.min(Math.max(0, scenes.length - 1), current + 1))} disabled={activeSceneIndex >= scenes.length - 1 || !activeTopicComplete}>Next -&gt;</button></div></div>
         <div className="study-next-card study-source-note"><span className="study-kicker">SOURCE ANCHORS</span>{activeScene?.sourceAnchorIds.length ? <ul>{activeScene.sourceAnchorIds.map((anchor) => <li key={anchor}>{anchor}</li>)}</ul> : <p>No server-owned anchors were returned for this scene.</p>}<small>Quotes are rendered only from the server source pack, never from model prose.</small></div>
       </aside>
     </div>
   </main>;
 }
 
-function InteractionResult({ result }: { result: StudyInteractionResponse }) {
-  const message = result.answer || result.explanation || result.reasonCode || result.state || "The provider returned a result.";
-  return <div className="study-interaction-result" role="status"><strong>{result.state || "complete"}</strong><p>{message}</p><small>{result.providerMode} / record v{result.recordVersion} / {result.sourceAnchorIds.length} anchors</small></div>;
+function InteractionResult({ result, canContinue, onSimilarRetry, onRetry, onContinue }: { result: StudyInteractionResponse; canContinue: boolean; onSimilarRetry: () => void; onRetry: () => void; onContinue: () => void }) {
+  const message = result.feedback || result.answer || result.explanation || result.reasonCode || result.state || "The provider returned a result.";
+  return <div className={`study-interaction-result ${result.correct === false ? "needs-review" : "passed"}`} role="status"><strong>{result.correct ? "Understanding confirmed" : result.correct === false ? "Review this idea before moving on" : result.state || "complete"}</strong><p>{message}</p>{result.correct === false && result.mistake && <p className="study-mistake"><strong>Where it went wrong:</strong> {result.mistake}</p>}{result.correct === false && result.correctAnswer && <p className="study-correction"><strong>Correct answer:</strong> {result.correctAnswer}</p>}{result.correct === false && result.correction && <p><strong>How to fix it:</strong> {result.correction}</p>}{result.remediation && <p><strong>Review next:</strong> {result.remediation}</p>}{typeof result.understandingScore === "number" && <span>Understanding: {result.understandingScore}%</span>}{result.overconfidence && <span className="study-overconfidence">Confidence was higher than the demonstrated understanding. Slow down and use the remediation below.</span>}{result.correct === false && <div className="study-result-actions">{result.retryPrompt && <button className="study-solid-button" type="button" onClick={onSimilarRetry}>Try a similar question</button>}{canContinue && <button className="study-outline-button" type="button" onClick={onContinue}>Review answer and continue</button>}<button className="study-outline-button study-retry-button" type="button" onClick={onRetry}>{result.retryPrompt ? "Retry this question" : "Try this stage again"}</button></div>}<small>{result.providerMode} / record v{result.recordVersion} / {result.sourceAnchorIds.length} anchors</small></div>;
 }

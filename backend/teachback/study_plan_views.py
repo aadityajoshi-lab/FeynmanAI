@@ -50,7 +50,7 @@ def _source_context(source_ids: list[str]) -> tuple[list[dict], set[str], str, b
         record = by_id[source_id]
         review_required = review_required or record.approval_status != "approved"
         versions.append(record.sha256[:12] or record.source_id[:12])
-        spans.extend({"sourceId": source_id, **candidate} for candidate in (record.candidates or []))
+        spans.extend({"sourceId": source_id, "sourceKind": record.source_kind, **candidate} for candidate in (record.candidates or []))
     anchors = {str(span.get("candidateId")) for span in spans if span.get("candidateId")}
     return spans, anchors, "uploaded-draft-" + "-".join(versions[:4]), review_required
 
@@ -75,7 +75,33 @@ def _validate_manifest(plan: dict, allowed_anchors: set[str]) -> None:
         for action in item.get("actions", []):
             if action.get("kind") not in {"reveal", "spotlight", "draw", "write", "equation", "pause"}:
                 raise ProviderOutputError("study plan contains an unsupported action")
+        for stage in item.get("stages", []):
+            if not isinstance(stage, dict) or stage.get("kind") not in {"definition", "mcq", "formula", "diagram", "numerical", "teach_back"}:
+                raise ProviderOutputError("study plan contains an unsupported assessment stage")
+            if not isinstance(stage.get("sourceAnchorIds"), list) or not stage.get("sourceAnchorIds"):
+                raise ProviderOutputError("assessment stage is missing approved source evidence")
+            if not set(stage["sourceAnchorIds"]).issubset(allowed_anchors):
+                raise ProviderOutputError("assessment stage contains an unapproved source anchor")
+            if not isinstance(stage.get("prompt"), str) or len(stage["prompt"].strip()) < 5:
+                raise ProviderOutputError("assessment stage is missing a learner-facing prompt")
     if plan["providerMode"] in {"live_openai", "live_fireworks"}:
+        staged_topics = [scene for scene in plan["scenes"] if scene.get("stages")]
+        if staged_topics:
+            if len(staged_topics) != len(plan["scenes"]):
+                raise ProviderOutputError("each topic must progress from definition to MCQ to application to teach-back")
+            for scene in staged_topics:
+                stage_kinds = [str(stage.get("kind")) for stage in scene.get("stages", [])]
+                if len(stage_kinds) != 4 or stage_kinds[:2] != ["definition", "mcq"] or stage_kinds[-1:] != ["teach_back"]:
+                    raise ProviderOutputError("each topic must progress from definition to MCQ to application to teach-back")
+                if stage_kinds[2] not in {"formula", "diagram", "numerical"}:
+                    raise ProviderOutputError("each topic must progress from definition to MCQ to application to teach-back")
+                for stage in scene.get("stages", []):
+                    if stage.get("kind") == "mcq" and (stage.get("responseType") != "single_choice" or len(stage.get("options") or []) < 3):
+                        raise ProviderOutputError("MCQ stages need at least three answer options")
+            for outline in plan["outline"]:
+                if not isinstance(outline.get("sourceAnchorIds"), list) or not outline.get("sourceAnchorIds"):
+                    raise ProviderOutputError("live study concept is missing approved source evidence")
+            return
         scene_types = {str(scene.get("type")) for scene in plan["scenes"]}
         # A module needs an explain-and-respond loop to be useful. Exam practice
         # is intentionally optional: it can be requested later from the module
@@ -116,6 +142,12 @@ class StudyPlanView(APIView):
         if not isinstance(source_ids, list) or not source_ids or len(source_ids) > 20 or any(not isinstance(item, str) or not item.strip() for item in source_ids):
             return _error("sourceIds must be a non-empty list of IDs")
         source_ids = [item.strip() for item in source_ids]
+        past_question_source_ids = body.get("pastQuestionSourceIds") or []
+        if not isinstance(past_question_source_ids, list) or any(not isinstance(item, str) or not item.strip() for item in past_question_source_ids):
+            return _error("pastQuestionSourceIds must be a list of source IDs")
+        past_question_source_ids = [item.strip() for item in past_question_source_ids]
+        if not set(past_question_source_ids).issubset(set(source_ids)):
+            return _error("past-question sources must also be included in sourceIds")
         provider_mode = str(body.get("provider") or body.get("providerMode") or settings.LLM_PROVIDER).strip().lower()
         provider_aliases = {"fireworks": "fireworks", "live_fireworks": "fireworks", "qwen": "fireworks", "openai": "openai", "live_openai": "openai", "fixture": "fixture", "codex_fixture": "fixture"}
         if provider_mode not in provider_aliases:
@@ -125,7 +157,7 @@ class StudyPlanView(APIView):
             if not source_spans:
                 return Response({"state": "needs_human_review", "reasonCode": "source_extraction_pending", "providerMode": "human_review", "sourceIds": source_ids, "chapterSelection": chapter_selection, "sourcePackVersion": source_pack_version, "recordVersion": 1, "reviewRequired": True}, status=status.HTTP_200_OK)
             provider = provider_for(provider_aliases[provider_mode])
-            plan = provider.generate_study_plan(StudyPlanRequest(subject_id, module_id, source_ids, chapter_selection, sorted(allowed_anchors), source_spans=source_spans, subject_title=str(body.get("subjectTitle") or subject_id)))
+            plan = provider.generate_study_plan(StudyPlanRequest(subject_id, module_id, source_ids, chapter_selection, sorted(allowed_anchors), source_spans=source_spans, subject_title=str(body.get("subjectTitle") or subject_id), past_question_source_ids=past_question_source_ids))
             # Human-review plans are a safe terminal state for unapproved uploads.
             if plan.get("state") == "needs_human_review":
                 return Response({**plan, "sourcePackVersion": source_pack_version, "recordVersion": 1, "reviewRequired": True}, status=status.HTTP_200_OK)
@@ -151,17 +183,36 @@ class StudyPlanInteractionView(APIView):
         scene = body.get("scene")
         response_text = body.get("response", "")
         kind = str(body.get("kind") or "teach_back").strip()
-        if kind not in {"predict", "retrieval", "teach_back", "exam_bridge"}:
-            return _error("kind must be predict, retrieval, teach_back, or exam_bridge")
+        if kind not in {"mcq", "predict", "retrieval", "formula", "diagram", "numerical", "teach_back", "exam_bridge"}:
+            return _error("kind must be mcq, formula, diagram, numerical, teach_back, or an existing checkpoint kind")
         if not isinstance(source_ids, list) or not source_ids or any(not isinstance(item, str) or not item.strip() for item in source_ids):
             return _error("sourceIds must be a non-empty list of IDs")
         if not isinstance(scene, dict):
             return _error("scene is required")
-        if not isinstance(response_text, str) or not response_text.strip() or len(response_text) > 12000:
-            return _error("response must be a non-empty string up to 12000 characters")
+        attachment = body.get("attachment")
+        if not isinstance(response_text, str) or len(response_text) > 12000:
+            return _error("response must be a string up to 12000 characters")
+        if attachment is not None:
+            if not isinstance(attachment, dict) or not isinstance(attachment.get("dataUrl"), str) or len(attachment["dataUrl"]) > 6_000_000:
+                return _error("attachment must be an image or PDF smaller than 4 MB")
+            if not str(attachment.get("mimeType") or "").lower() in {"image/png", "image/jpeg", "image/webp", "application/pdf"}:
+                return _error("attachment must be a PNG, JPEG, WebP, or PDF")
+        if not response_text.strip() and attachment is None:
+            return _error("response or an uploaded answer is required")
+        confidence = body.get("confidence", 3)
+        try:
+            confidence = int(confidence)
+        except (TypeError, ValueError):
+            return _error("confidence must be an integer from 1 to 5")
+        if confidence < 1 or confidence > 5:
+            return _error("confidence must be an integer from 1 to 5")
         scene_anchors = scene.get("sourceAnchorIds")
         if not isinstance(scene_anchors, list) or not scene_anchors or any(not isinstance(item, str) for item in scene_anchors):
             return _error("scene.sourceAnchorIds must be a non-empty list")
+        stage = scene.get("stage") if isinstance(scene.get("stage"), dict) else {}
+        stage_anchors = stage.get("sourceAnchorIds") or scene_anchors
+        if not isinstance(stage_anchors, list) or not stage_anchors or any(not isinstance(item, str) for item in stage_anchors):
+            return _error("stage.sourceAnchorIds must be a non-empty list")
         provider_mode = str(body.get("provider") or settings.LLM_PROVIDER).strip().lower()
         provider_aliases = {"fireworks": "fireworks", "live_fireworks": "fireworks", "qwen": "fireworks", "openai": "openai", "live_openai": "openai", "fixture": "fixture", "codex_fixture": "fixture"}
         if provider_mode not in provider_aliases:
@@ -170,6 +221,8 @@ class StudyPlanInteractionView(APIView):
             source_spans, allowed_anchors, source_pack_version, review_required = _source_context([item.strip() for item in source_ids])
             if not set(scene_anchors).issubset(allowed_anchors):
                 return _error("scene contains an unapproved source anchor", "source_boundary_violation")
+            if not set(stage_anchors).issubset(allowed_anchors):
+                return _error("stage contains an unapproved source anchor", "source_boundary_violation")
             provider = provider_for(provider_aliases[provider_mode])
             manifest = {
                 "sceneId": str(scene.get("sceneId") or "generated-scene"),
@@ -177,12 +230,17 @@ class StudyPlanInteractionView(APIView):
                 "responseType": str(scene.get("responseType") or "long_text"),
                 "sourceAnchorIds": sorted(set(scene_anchors)),
                 "sourceSpans": source_spans,
+                "stage": stage,
+                "stageKind": str(stage.get("kind") or kind),
+                "stageId": str(stage.get("stageId") or ""),
             }
             provider_request = {
                 "kind": kind,
                 "manifest": manifest,
                 "prediction": response_text if kind == "predict" else "",
                 "explanation": response_text if kind != "predict" else "",
+                "confidence": confidence,
+                "attachment": attachment,
             }
             result = provider.evaluate_checkpoint(provider_request)
             result.update({

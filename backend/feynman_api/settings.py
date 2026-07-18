@@ -65,7 +65,10 @@ OPENAI_API_KEY = configured("OPENAI_API_KEY", "")
 FIREWORKS_API_KEY = configured("FIREWORKS_API_KEY", "")
 FIREWORKS_MODEL = configured("FIREWORKS_MODEL", "accounts/fireworks/models/qwen3p7-plus")
 FIREWORKS_BASE_URL = configured("FIREWORKS_BASE_URL", "https://api.fireworks.ai/inference/v1")
-FIREWORKS_TIMEOUT_SECONDS = float(configured("FIREWORKS_TIMEOUT_SECONDS", "90"))
+# A complete study module includes source-grounded explanations, visuals, and
+# four assessment stages per topic. Qwen can need more than a minute for that
+# structured response, so allow a longer provider window by default.
+FIREWORKS_TIMEOUT_SECONDS = float(configured("FIREWORKS_TIMEOUT_SECONDS", "240"))
 # The bounded study-source endpoint validates uploads at 50 MiB. Keep the
 # request parser just above that ceiling and spool larger files to disk rather
 # than rejecting ordinary lecture PDFs before the endpoint can inspect them.

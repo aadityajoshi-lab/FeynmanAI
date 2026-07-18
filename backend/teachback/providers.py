@@ -21,6 +21,22 @@ class ProviderOutputError(ValueError):
     pass
 
 
+MAX_PROVIDER_INTEGER_DIGITS = 256
+
+
+def _bounded_provider_int(raw: str) -> int | str:
+    """Keep absurd provider numbers as text instead of converting them."""
+    digits = raw.lstrip("-").lstrip("0") or "0"
+    if len(digits) > MAX_PROVIDER_INTEGER_DIGITS:
+        return raw
+    return int(raw)
+
+
+def load_provider_json(raw: str) -> dict:
+    """Parse provider JSON without allowing unbounded integer conversion."""
+    return json.loads(raw, strict=False, parse_int=_bounded_provider_int)
+
+
 @dataclass
 class AuditRequest:
     learner_text: str
@@ -47,6 +63,7 @@ class StudyPlanRequest:
     approved_source_ids: list[str]
     source_spans: list[dict] = field(default_factory=list)
     subject_title: str = ""
+    past_question_source_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -84,8 +101,79 @@ CHAT_ACTION_TYPES = [
 ]
 
 
-SCENE_TYPES = ["whiteboard", "two_d", "three_d", "predict_checkpoint", "retrieval", "teach_back", "exam_bridge", "question_bank"]
+SCENE_TYPES = ["topic", "whiteboard", "two_d", "three_d", "predict_checkpoint", "retrieval", "teach_back", "exam_bridge", "question_bank"]
 ACTION_TYPES = ["reveal", "spotlight", "draw", "write", "equation", "pause"]
+ASSESSMENT_STAGE_KINDS = ["definition", "mcq", "formula", "diagram", "numerical", "teach_back"]
+
+
+def assessment_stage_schema(anchors: list[str], *, max_prompt_length: int = 700) -> dict:
+    """Schema for the learner's topic-by-topic assessment ladder."""
+
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["stageId", "kind", "title", "prompt", "responseType", "options", "sourceAnchorIds"],
+        "properties": {
+            "stageId": {"type": "string", "minLength": 1, "maxLength": 100},
+            "kind": {"type": "string", "enum": ASSESSMENT_STAGE_KINDS},
+            "title": {"type": "string", "minLength": 1, "maxLength": 160},
+            "prompt": {"type": "string", "minLength": 1, "maxLength": max_prompt_length},
+            "responseType": {"type": "string", "enum": ["none", "single_choice", "short_text", "long_text", "file"]},
+            "options": {"type": ["array", "null"], "minItems": 2, "maxItems": 4, "items": {"type": "string", "maxLength": 220}},
+            "sourceAnchorIds": {"type": "array", "minItems": 1, "maxItems": 3, "items": {"type": "string", "enum": anchors}},
+        },
+    }
+
+
+def normalize_answer_options(options: Any) -> list[str] | None:
+    """Keep learner-facing MCQ options textual and never expose answer flags."""
+    if isinstance(options, dict):
+        options = options.get("items") or options.get("choices") or options.get("values")
+    if not isinstance(options, list):
+        return None
+    normalized: list[str] = []
+    for option in options:
+        if isinstance(option, dict):
+            text = option.get("text") or option.get("label") or option.get("value") or option.get("stem") or option.get("option")
+        else:
+            text = option
+        if text is not None and str(text).strip():
+            normalized.append(str(text).strip())
+    if not normalized:
+        return None
+    schema_labels = {"id", "stageid", "kind", "type", "title", "stem", "prompt", "question", "responsetype", "options", "choices", "sourceanchors", "sourceanchorids"}
+    if len(normalized) >= 3 and all(value.casefold() in schema_labels for value in normalized):
+        return None
+    return normalized
+
+
+def normalize_retry_result(result: dict, manifest: dict) -> dict:
+    """Keep optional similar-question data safe and aligned to the stage."""
+    if result.get("correct") is not False:
+        result["retryPrompt"] = None
+        result["retryOptions"] = None
+        result["retryResponseType"] = None
+        result["retrySourceAnchorIds"] = []
+        return result
+    stage = manifest.get("stage") if isinstance(manifest.get("stage"), dict) else {}
+    kind = str(manifest.get("stageKind") or stage.get("kind") or "teach_back")
+    prompt = result.get("retryPrompt") or result.get("similarPrompt")
+    result["retryPrompt"] = str(prompt).strip() if isinstance(prompt, str) and prompt.strip() else None
+    options = normalize_answer_options(result.get("retryOptions") or result.get("similarOptions"))
+    if kind == "mcq" and (not options or len(options) < 3):
+        options = None
+    if kind != "mcq":
+        options = None
+    result["retryOptions"] = options
+    response_type = str(result.get("retryResponseType") or stage.get("responseType") or "long_text")
+    result["retryResponseType"] = response_type if response_type in {"single_choice", "short_text", "long_text", "file"} else "long_text"
+    allowed = list(manifest.get("sourceAnchorIds") or [])
+    returned = result.get("retrySourceAnchorIds")
+    result["retrySourceAnchorIds"] = [anchor for anchor in returned if anchor in allowed] if isinstance(returned, list) else []
+    if not result["retryPrompt"]:
+        result["retryOptions"] = None
+        result["retrySourceAnchorIds"] = []
+    return result
 
 
 def study_plan_schema(request: StudyPlanRequest) -> dict:
@@ -123,26 +211,31 @@ def study_plan_schema(request: StudyPlanRequest) -> dict:
             "durationMs": {"type": ["integer", "null"], "minimum": 0},
         },
     }
+    stage_schema = assessment_stage_schema(allowed_anchor_ids)
     scene_schema = {
         "type": "object",
         "additionalProperties": False,
-        "required": ["sceneId", "conceptId", "type", "title", "explanation", "sourceAnchorIds", "actions", "config", "checkpoint"],
+        "required": ["sceneId", "conceptId", "type", "title", "explanation", "keyPoints", "workedExample", "commonMistakes", "sourceAnchorIds", "actions", "config", "checkpoint", "stages"],
         "properties": {
             "sceneId": {"type": "string"},
             "conceptId": {"type": "string"},
             "type": {"type": "string", "enum": SCENE_TYPES},
             "title": {"type": "string"},
             "explanation": {"type": "string", "minLength": 1},
+            "keyPoints": {"type": "array", "minItems": 2, "maxItems": 6, "items": {"type": "string", "minLength": 1}},
+            "workedExample": {"type": ["string", "null"], "maxLength": 1800},
+            "commonMistakes": {"type": "array", "minItems": 1, "maxItems": 4, "items": {"type": "string", "minLength": 1}},
             "sourceAnchorIds": {"type": "array", "minItems": 1, "items": {"type": "string", "enum": allowed_anchor_ids}},
             "actions": {"type": "array", "minItems": 1, "maxItems": 12, "items": action_schema},
-            "config": {"type": "object"},
+            "config": {"type": "object", "maxProperties": 12},
             "checkpoint": {"type": ["object", "null"], "properties": checkpoint_schema["properties"], "required": checkpoint_schema["required"], "additionalProperties": False},
+            "stages": {"type": "array", "minItems": 1, "maxItems": 6, "items": stage_schema},
         },
     }
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["studyPlanId", "sourceIds", "chapterSelection", "sourcePackVersion", "recordVersion", "outline", "scenes"],
+        "required": ["studyPlanId", "sourceIds", "chapterSelection", "sourcePackVersion", "recordVersion", "outline", "scenes", "pastQuestionAnalysis"],
         "properties": {
             "studyPlanId": {"type": "string", "minLength": 8},
             "sourceIds": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "string", "enum": list(request.source_ids)}},
@@ -156,6 +249,7 @@ def study_plan_schema(request: StudyPlanRequest) -> dict:
                 "sourceAnchorIds": {"type": "array", "minItems": 1, "items": {"type": "string", "enum": allowed_anchor_ids}},
             }}},
             "scenes": {"type": "array", "minItems": 1, "maxItems": 40, "items": scene_schema},
+            "pastQuestionAnalysis": {"type": "array", "maxItems": 6, "items": {"type": "string", "maxLength": 500}},
         },
     }
 
@@ -227,48 +321,54 @@ def compact_study_plan_schema(request: StudyPlanRequest) -> dict:
             },
         },
     }
+    stage_schema = assessment_stage_schema(anchors, max_prompt_length=520)
     scene_schema = {
         "type": "object",
         "additionalProperties": False,
-        "required": ["sceneId", "conceptId", "type", "title", "explanation", "sourceAnchorIds", "actions", "config", "checkpoint"],
+        "required": ["sceneId", "conceptId", "type", "title", "explanation", "keyPoints", "workedExample", "commonMistakes", "sourceAnchorIds", "actions", "config", "checkpoint", "stages"],
         "properties": {
             "sceneId": {"type": "string", "minLength": 1, "maxLength": 80},
             "conceptId": {"type": "string", "minLength": 1, "maxLength": 80},
-            "type": {"type": "string", "enum": SCENE_TYPES},
+            "type": {"type": "string", "enum": ["topic", "whiteboard", "two_d", "three_d", "predict_checkpoint", "retrieval", "teach_back", "exam_bridge", "question_bank"]},
             "title": {"type": "string", "minLength": 1, "maxLength": 160},
-            "explanation": {"type": "string", "minLength": 20, "maxLength": 1200},
+            "explanation": {"type": "string", "minLength": 80, "maxLength": 2400},
+            "keyPoints": {"type": "array", "minItems": 3, "maxItems": 6, "items": {"type": "string", "minLength": 1, "maxLength": 360}},
+            "workedExample": {"type": ["string", "null"], "maxLength": 1800},
+            "commonMistakes": {"type": "array", "minItems": 2, "maxItems": 4, "items": {"type": "string", "minLength": 1, "maxLength": 360}},
             "sourceAnchorIds": {
                 "type": "array",
                 "minItems": 1,
                 "maxItems": 2,
                 "items": {"type": "string", "enum": anchors},
             },
-            "actions": {"type": "array", "minItems": 1, "maxItems": 2, "items": action_schema},
-            # Keep optional visualization data out of the first response. The
-            # client can request an on-demand visual after it knows what the
-            # learner is struggling with.
-            "config": {"type": "object", "additionalProperties": False},
+            "actions": {"type": "array", "minItems": 4, "maxItems": 6, "items": action_schema},
+            "config": {"type": "object", "maxProperties": 12},
             "checkpoint": checkpoint_schema,
+            "stages": {"type": "array", "minItems": 4, "maxItems": 4, "items": stage_schema},
         },
     }
     return {
         "type": "object",
         "additionalProperties": False,
-        "required": ["studyPlanId", "sourceIds", "chapterSelection", "sourcePackVersion", "recordVersion", "outline", "scenes"],
+        "required": ["studyPlanId", "sourceIds", "chapterSelection", "sourcePackVersion", "recordVersion", "outline", "scenes", "pastQuestionAnalysis"],
         "properties": {
             "studyPlanId": {"type": "string", "minLength": 1, "maxLength": 100},
-            "sourceIds": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "string", "enum": list(request.source_ids)}},
+            "sourceIds": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "string", "enum": list(request.source_ids)}},
             "chapterSelection": {"type": "string", "enum": ["chapter_1", "all"]},
             "sourcePackVersion": {"type": "string", "minLength": 1, "maxLength": 160},
             "recordVersion": {"type": "integer", "minimum": 1},
-            "outline": {"type": "array", "minItems": 1, "maxItems": 4, "items": outline_schema},
-            "scenes": {"type": "array", "minItems": 4, "maxItems": 4, "items": scene_schema},
+            "outline": {"type": "array", "minItems": 1, "maxItems": 12, "items": outline_schema},
+            "scenes": {"type": "array", "minItems": 1, "maxItems": 12, "items": scene_schema},
+            "pastQuestionAnalysis": {"type": "array", "maxItems": 6, "items": {"type": "string", "maxLength": 500}},
         },
     }
 
 
 def normalize_live_study_plan(plan: dict, request: StudyPlanRequest) -> dict:
     """Normalize provider-shaped instructional metadata without adding lesson facts."""
+    if not isinstance(plan.get("recordVersion"), int) or plan.get("recordVersion", 0) < 1:
+        plan["recordVersion"] = 1
+    plan["pastQuestionAnalysis"] = [str(item).strip() for item in (plan.get("pastQuestionAnalysis") or []) if str(item).strip()][:6]
     interactive_types = {"predict_checkpoint": "predict", "retrieval": "retrieval", "teach_back": "teach_back", "exam_bridge": "exam_bridge"}
     for outline in plan.get("outline", []):
         if not isinstance(outline, dict):
@@ -284,6 +384,9 @@ def normalize_live_study_plan(plan: dict, request: StudyPlanRequest) -> dict:
         explanation = scene.get("explanation") or config.get("description") or scene.get("title") or ""
         scene["explanation"] = str(explanation).strip()
         scene["title"] = str(scene.get("title") or scene["explanation"][:96] or "Generated learning scene").strip()
+        scene["keyPoints"] = [str(item).strip() for item in (scene.get("keyPoints") or []) if str(item).strip()][:6]
+        scene["workedExample"] = str(scene.get("workedExample") or "").strip() or None
+        scene["commonMistakes"] = [str(item).strip() for item in (scene.get("commonMistakes") or []) if str(item).strip()][:4]
         normalized_actions = []
         for index, action in enumerate(scene.get("actions") or []):
             if not isinstance(action, dict):
@@ -300,7 +403,7 @@ def normalize_live_study_plan(plan: dict, request: StudyPlanRequest) -> dict:
                 "kind": str(action.get("kind") or "write"),
                 "label": str(action.get("label") or "Model-authored step"),
                 "payload": normalized_payload,
-                "durationMs": action.get("durationMs"),
+                "durationMs": action.get("durationMs") if isinstance(action.get("durationMs"), int) and action.get("durationMs") >= 0 else None,
             })
         if not normalized_actions and scene["explanation"]:
             normalized_actions.append({
@@ -311,6 +414,53 @@ def normalize_live_study_plan(plan: dict, request: StudyPlanRequest) -> dict:
                 "durationMs": None,
             })
         scene["actions"] = normalized_actions
+        normalized_stages = []
+        for index, stage in enumerate(scene.get("stages") or []):
+            if not isinstance(stage, dict):
+                continue
+            options = normalize_answer_options(stage.get("options") or stage.get("choices"))
+            raw_kind = stage.get("kind") or stage.get("stageKind") or stage.get("type")
+            raw_prompt = stage.get("prompt") or stage.get("stem") or stage.get("question")
+            raw_source_anchors = stage.get("sourceAnchorIds") or stage.get("sourceAnchors")
+            normalized_stages.append({
+                "stageId": str(stage.get("stageId") or stage.get("id") or f"{scene.get('sceneId', 'topic')}-stage-{index + 1}"),
+                "kind": str(raw_kind or "teach_back"),
+                "title": str(stage.get("title") or stage.get("kind") or "Check your understanding"),
+                "prompt": str(raw_prompt or scene["explanation"] or scene["title"]),
+                "responseType": str(stage.get("responseType") or ("single_choice" if options else "long_text")),
+                "options": options,
+                "sourceAnchorIds": list(raw_source_anchors or scene.get("sourceAnchorIds") or []),
+            })
+        if not normalized_stages and isinstance(scene.get("checkpoint"), dict):
+            checkpoint = scene["checkpoint"]
+            normalized_stages.append({
+                "stageId": f"{scene.get('sceneId', 'scene')}-stage-1",
+                "kind": str(checkpoint.get("kind") or "teach_back"),
+                "title": str(checkpoint.get("kind") or "Check your understanding"),
+                "prompt": str(checkpoint.get("prompt") or scene["explanation"]),
+                "responseType": str(checkpoint.get("responseType") or "long_text"),
+                "options": normalize_answer_options(checkpoint.get("options")),
+                "sourceAnchorIds": list(checkpoint.get("sourceAnchorIds") or scene.get("sourceAnchorIds") or []),
+            })
+        stage_order = {"definition": 0, "mcq": 1, "formula": 2, "diagram": 2, "numerical": 2, "teach_back": 3}
+        ordered_stages = sorted(normalized_stages, key=lambda stage: stage_order.get(stage.get("kind"), 4))
+        # Providers occasionally return a duplicate application stage or an
+        # extra learner check. Once all required kinds exist, keep the first
+        # model-authored instance of each ladder position and expose the
+        # canonical four-stage flow to the validator and learner.
+        required_kinds = {"definition", "mcq", "teach_back"}
+        application_kinds = {"formula", "diagram", "numerical"}
+        if (
+            required_kinds.issubset({stage.get("kind") for stage in ordered_stages})
+            and any(stage.get("kind") in application_kinds for stage in ordered_stages)
+        ):
+            selected_definition = next(stage for stage in ordered_stages if stage.get("kind") == "definition")
+            selected_mcq = next(stage for stage in ordered_stages if stage.get("kind") == "mcq")
+            selected_application = next(stage for stage in ordered_stages if stage.get("kind") in application_kinds)
+            selected_teach_back = next(stage for stage in ordered_stages if stage.get("kind") == "teach_back")
+            scene["stages"] = [selected_definition, selected_mcq, selected_application, selected_teach_back]
+        else:
+            scene["stages"] = ordered_stages
         scene_type = str(scene.get("type") or "")
         checkpoint = scene.get("checkpoint") if isinstance(scene.get("checkpoint"), dict) else None
         # Some OpenAI-compatible models honor the checkpoint schema but flatten
@@ -324,12 +474,12 @@ def normalize_live_study_plan(plan: dict, request: StudyPlanRequest) -> dict:
             scene["type"] = checkpoint_scene_type
         if scene_type in interactive_types:
             checkpoint = checkpoint or {}
-            options = checkpoint.get("options") if isinstance(checkpoint.get("options"), list) else None
+            options = normalize_answer_options(checkpoint.get("options"))
             checkpoint = {
                 "kind": str(checkpoint.get("kind") or interactive_types[scene_type]),
                 "prompt": str(checkpoint.get("prompt") or scene["explanation"] or scene.get("title") or "Respond to this scene."),
                 "responseType": str(checkpoint.get("responseType") or ("single_choice" if options else "long_text")),
-                "options": [str(item) for item in options] if options else None,
+                "options": options,
                 "sourceAnchorIds": list(checkpoint.get("sourceAnchorIds") or scene.get("sourceAnchorIds") or []),
             }
         scene["checkpoint"] = checkpoint
@@ -372,10 +522,38 @@ def normalize_live_study_plan(plan: dict, request: StudyPlanRequest) -> dict:
         visual_candidate = visual_candidate or next((scene for scene in scenes if scene.get("type") not in interactive_types and scene.get("type") != "whiteboard" and any(term in json.dumps(scene.get("config", {}), ensure_ascii=False).lower() for term in ("2d", "3d", "plot", "graph", "diagram", "visual"))), None)
         if visual_candidate is not None:
             visual_candidate["type"] = "three_d" if "3d" in json.dumps(visual_candidate.get("config", {}), ensure_ascii=False).lower() else "two_d"
+    def section_order(item: dict, index: int) -> tuple:
+        match = re.search(r"(?<!\d)(\d+(?:\.\d+)+)", str(item.get("title") or item.get("sceneId") or ""))
+        return (0, tuple(int(part) for part in match.group(1).split(".")), index) if match else (1, (), index)
+    plan["scenes"] = [item for index, item in sorted(enumerate(scenes), key=lambda pair: section_order(pair[1], pair[0]))]
     return plan
 
 
 def missing_required_scene_types(plan: dict) -> list[str]:
+    scenes = [scene for scene in plan.get("scenes", []) if isinstance(scene, dict)]
+    staged_topics = [scene for scene in scenes if scene.get("stages")]
+    if staged_topics:
+        missing: list[str] = []
+        # Once any topic uses the staged learning loop, every returned scene
+        # belongs to that loop. Treat an un-staged scene as missing the full
+        # ladder so the provider repair pass can fill it instead of allowing a
+        # mixed legacy/staged manifest through to the API validator.
+        topics_to_check = staged_topics + [scene for scene in scenes if not scene.get("stages")]
+        for scene in topics_to_check:
+            scene_stages = [stage for stage in scene.get("stages", []) if isinstance(stage, dict)]
+            stage_kinds = {str(stage.get("kind")) for stage in scene_stages}
+            for required_kind in ("definition", "mcq", "teach_back"):
+                if required_kind not in stage_kinds and required_kind not in missing:
+                    missing.append(required_kind)
+            mcq_stage = next((stage for stage in scene_stages if stage.get("kind") == "mcq"), None)
+            if mcq_stage is not None and (
+                mcq_stage.get("responseType") != "single_choice"
+                or len(mcq_stage.get("options") or []) < 3
+            ) and "mcq" not in missing:
+                missing.append("mcq")
+            if not {"formula", "diagram", "numerical"}.intersection(stage_kinds) and "formula_or_diagram_or_numerical" not in missing:
+                missing.append("formula_or_diagram_or_numerical")
+        return missing
     present = {str(scene.get("type")) for scene in plan.get("scenes", []) if isinstance(scene, dict)}
     # Exam practice is an optional extension, not a publication gate. This
     # prevents a valid learning loop from being discarded because a provider
@@ -537,10 +715,36 @@ class FixtureProvider(LLMProvider):
 
     def evaluate_checkpoint(self, request: dict) -> dict:
         manifest = request.get("manifest") or {}
-        prediction = str(request.get("prediction", "")).strip()
+        prediction = str(request.get("prediction") or request.get("explanation") or "").strip()
+        confidence = max(1, min(5, int(request.get("confidence") or 3)))
+        correct = len(prediction) >= 20
         if request.get("kind") == "explain":
-            return {"state": "complete", "explanation": "Use the approved source evidence to connect the transformation to the resulting artifact.", "prompt": manifest.get("prompt", "Explain your reasoning."), "responseType": manifest.get("responseType", "text"), "sourceAnchorIds": list(manifest.get("sourceAnchorIds", [])), "providerMode": self.mode}
-        return {"state": "complete", "prediction": prediction, "prompt": manifest.get("prompt", "What evidence would change your mind?"), "responseType": manifest.get("responseType", "text"), "sourceAnchorIds": list(manifest.get("sourceAnchorIds", [])), "providerMode": self.mode}
+            correct = len(prediction) >= 30
+        result = {
+            "state": "complete",
+            "prediction": prediction,
+            "prompt": manifest.get("prompt", "What evidence would change your mind?"),
+            "responseType": manifest.get("responseType", "text"),
+            "sourceAnchorIds": list(manifest.get("sourceAnchorIds", [])),
+            "correct": correct,
+            "understandingScore": 80 if correct else 35,
+            "confidenceScore": confidence,
+            "overconfidence": confidence >= 4 and not correct,
+            "feedback": "Good enough to continue." if correct else "Add the key idea and the reason it is true, then try again.",
+            "remediation": "Review the topic definition and the revealed whiteboard action before retrying." if not correct else "",
+            "mistake": "" if correct else "The response does not yet demonstrate the requested idea.",
+            "correctAnswer": "" if correct else "Use the topic definition and worked example to state the requested idea.",
+            "correction": "" if correct else "Include the relevant concept, relationship, and reason in the next attempt.",
+            "nextAction": "advance" if correct else "retry",
+            "providerMode": self.mode,
+        }
+        if not correct:
+            stage = manifest.get("stage") if isinstance(manifest.get("stage"), dict) else {}
+            result["retryPrompt"] = f"Try a similar check: explain or apply the same idea from {stage.get('title') or 'this topic'}."
+            result["retryOptions"] = stage.get("options") if request.get("kind") == "mcq" else None
+            result["retryResponseType"] = stage.get("responseType") or "long_text"
+            result["retrySourceAnchorIds"] = list(manifest.get("sourceAnchorIds", []))
+        return normalize_retry_result(result, manifest)
 
     def recommend_learning_mode(self, context: dict) -> dict:
         return {"modeId": context.get("modeId", "self_explain"), "reason": context.get("reason", "fixture_rule"), "providerMode": self.mode}
@@ -639,7 +843,7 @@ class OpenAIProvider(LLMProvider):
             raw = getattr(response, "output_text", "")
             if not raw:
                 raise ProviderOutputError("OpenAI returned no structured output")
-            return json.loads(raw)
+            return load_provider_json(raw)
         except ProviderOutputError:
             raise
         except Exception as exc:
@@ -671,24 +875,44 @@ class OpenAIProvider(LLMProvider):
         schema = {
             "type": "object",
             "additionalProperties": False,
-            "required": ["state", "sourceAnchorIds"],
+            "required": ["state", "correct", "understandingScore", "overconfidence", "feedback", "remediation", "mistake", "correctAnswer", "correction", "nextAction", "sourceAnchorIds", "retryPrompt", "retryOptions", "retryResponseType", "retrySourceAnchorIds"],
             "properties": {
                 "state": {"type": "string", "enum": ["complete", "abstained", "needs_human_review"]},
+                "correct": {"type": "boolean"},
+                "understandingScore": {"type": "integer", "minimum": 0, "maximum": 100},
+                "overconfidence": {"type": "boolean"},
+                "feedback": {"type": "string"},
+                "remediation": {"type": "string"},
+                "mistake": {"type": "string"},
+                "correctAnswer": {"type": "string"},
+                "correction": {"type": "string"},
+                "nextAction": {"type": "string", "enum": ["advance", "retry", "review"]},
                 "prediction": {"type": "string"},
                 "explanation": {"type": "string"},
                 "prompt": {"type": "string"},
                 "responseType": {"type": "string"},
                 "reasonCode": {"type": "string"},
                 "sourceAnchorIds": {"type": "array", "items": {"type": "string"}},
+                "retryPrompt": {"type": ["string", "null"]},
+                "retryOptions": {"type": ["array", "null"], "maxItems": 4, "items": {"type": "string", "maxLength": 300}},
+                "retryResponseType": {"type": ["string", "null"]},
+                "retrySourceAnchorIds": {"type": "array", "items": {"type": "string"}},
             },
         }
         instruction = (
             "Evaluate one bounded learning checkpoint using only the supplied manifest and approved source IDs. "
             "Do not invent quotes or source IDs. If the explanation cannot be supported, abstain. "
             f"Manifest: {manifest}\nAllowed source IDs: {allowed_anchor_ids}\n"
-            f"Learner prediction: {request.get('prediction', '')}\nLearner explanation: {request.get('explanation', '')}"
+            f"Stage: {manifest.get('stage', {})}\nLearner confidence (1=guessing, 5=very confident): {request.get('confidence', 3)}\n"
+            f"Learner prediction: {request.get('prediction', '')}\nLearner explanation: {request.get('explanation', '')}\n"
+            "Return correct=true only when the answer demonstrates the requested concept. Score understanding from 0 to 100. "
+            "Set overconfidence=true when confidence is 4 or 5 but the answer is incorrect or materially incomplete. "
+            "Use nextAction advance only for a correct answer; use retry for a fixable mistake and review when the evidence is insufficient. "
+            "When not correct, mistake must identify the exact incorrect or missing part, correctAnswer must state the source-grounded answer, correction must explain how to fix it, and remediation must name the exact source-grounded idea or step the learner should review before retrying. "
+            "When not correct, also return retryPrompt with one similar but not identical check for the same concept. For an MCQ, return 3 or 4 new plausible text retryOptions with no answer key or correctness flags. For formula, numerical, diagram, or teach-back, return retryOptions as null and keep retryResponseType appropriate to the stage. When correct, set retryPrompt to null, retryOptions to null, and retrySourceAnchorIds to an empty list. "
         )
         result = self._call(instruction, "checkpoint_v1", schema)
+        result = normalize_retry_result(result, manifest)
         returned_ids = result.get("sourceAnchorIds", [])
         if any(anchor_id not in allowed_anchor_ids for anchor_id in returned_ids):
             raise ProviderOutputError("provider returned an unapproved source anchor")
@@ -818,16 +1042,38 @@ class FireworksProvider(LLMProvider):
     def evaluate_checkpoint(self, request: dict) -> dict:
         manifest = request.get("manifest") or {}
         allowed = list(manifest.get("sourceAnchorIds", []))
-        schema = {"type": "object", "additionalProperties": False, "required": ["state", "sourceAnchorIds"], "properties": {"state": {"type": "string", "enum": ["complete", "abstained", "needs_human_review"]}, "prediction": {"type": "string"}, "explanation": {"type": "string"}, "prompt": {"type": "string"}, "responseType": {"type": "string"}, "reasonCode": {"type": "string"}, "sourceAnchorIds": {"type": "array", "items": {"type": "string"}}}}
-        result = self._chat_json(
+        schema = {"type": "object", "additionalProperties": False, "required": ["state", "correct", "understandingScore", "overconfidence", "feedback", "remediation", "mistake", "correctAnswer", "correction", "nextAction", "sourceAnchorIds", "retryPrompt", "retryOptions", "retryResponseType", "retrySourceAnchorIds"], "properties": {"state": {"type": "string", "enum": ["complete", "abstained", "needs_human_review"]}, "correct": {"type": "boolean"}, "understandingScore": {"type": "integer", "minimum": 0, "maximum": 100}, "overconfidence": {"type": "boolean"}, "feedback": {"type": "string"}, "remediation": {"type": "string"}, "mistake": {"type": "string"}, "correctAnswer": {"type": "string"}, "correction": {"type": "string"}, "nextAction": {"type": "string", "enum": ["advance", "retry", "review"]}, "prediction": {"type": "string"}, "explanation": {"type": "string"}, "prompt": {"type": "string"}, "responseType": {"type": "string"}, "reasonCode": {"type": "string"}, "sourceAnchorIds": {"type": "array", "items": {"type": "string"}}, "retryPrompt": {"type": ["string", "null"]}, "retryOptions": {"type": ["array", "null"], "maxItems": 4, "items": {"type": "string", "maxLength": 300}}, "retryResponseType": {"type": ["string", "null"]}, "retrySourceAnchorIds": {"type": "array", "items": {"type": "string"}}}}
+        evaluation_instruction = (
             f"Evaluate a bounded checkpoint using only this manifest and its approved source spans. "
             f"Manifest: {manifest}. Approved source spans: {manifest.get('sourceSpans', [])}. "
-            f"Learner prediction: {request.get('prediction', '')}. Learner explanation: {request.get('explanation', '')}.",
-            "checkpoint_v3",
-            schema,
+            f"Stage: {manifest.get('stage', {})}. Learner confidence (1=guessing, 5=very confident): {request.get('confidence', 3)}. "
+            f"Learner prediction: {request.get('prediction', '')}. Learner explanation: {request.get('explanation', '')}. "
         )
-        if not set(result.get("sourceAnchorIds", [])).issubset(set(allowed)):
-            raise ProviderOutputError("Fireworks returned an unapproved checkpoint anchor")
+        if str(manifest.get("stageKind") or "").lower() == "mcq" or str(request.get("kind") or "").lower() == "mcq":
+            evaluation_instruction += (
+                "This is a multiple-choice stage. Treat the learner explanation as the exact selected option. Compare it against the exact options in Stage, determine the correct option from the approved source spans, and never evaluate against a different or generic question. If incorrect, correctAnswer must identify the correct option text or state the source-grounded answer for this exact stem. "
+            )
+        evaluation_instruction += (
+            "Return correct=true only when the answer demonstrates the requested concept. Score understanding from 0 to 100. "
+            "Set overconfidence=true when confidence is 4 or 5 but the answer is incorrect or materially incomplete. "
+            "Use nextAction advance only for a correct answer; use retry for a fixable mistake and review when evidence is insufficient. When not correct, mistake must identify the exact incorrect or missing part, correctAnswer must state the source-grounded answer, correction must explain how to fix it, and remediation must name the exact source-grounded idea to review before retrying. "
+            "When not correct, also return retryPrompt with one similar but not identical check for the same concept. For an MCQ, return 3 or 4 new plausible text retryOptions with no answer key or correctness flags. For formula, numerical, diagram, or teach-back, return retryOptions as null and keep retryResponseType appropriate to the stage. When correct, set retryPrompt to null, retryOptions to null, and retrySourceAnchorIds to an empty list."
+        )
+        result = self._chat_json(
+            evaluation_instruction,
+            "checkpoint_v4",
+            schema,
+            attachment=request.get("attachment"),
+        )
+        # The evaluator may echo a candidate locator rather than the exact
+        # server-owned anchor ID. Never expose that untrusted locator, and do
+        # not turn an otherwise valid learner evaluation into a 422. The
+        # request manifest has already been checked against approved anchors.
+        returned_anchors = result.get("sourceAnchorIds")
+        if not isinstance(returned_anchors, list):
+            returned_anchors = []
+        result["sourceAnchorIds"] = [anchor for anchor in returned_anchors if anchor in allowed] or allowed
+        result = normalize_retry_result(result, manifest)
         result["providerMode"] = self.mode
         return result
 
@@ -866,10 +1112,16 @@ class FireworksProvider(LLMProvider):
         result["providerMode"] = self.mode
         return result
 
-    def _chat_json(self, instruction: str, schema_name: str, schema: dict) -> dict:
+    def _chat_json(self, instruction: str, schema_name: str, schema: dict, *, attachment: dict | None = None) -> dict:
         last_error: Exception | None = None
         for attempt in range(2):
             try:
+                user_content: str | list[dict] = instruction
+                if isinstance(attachment, dict) and isinstance(attachment.get("dataUrl"), str):
+                    user_content = [
+                        {"type": "text", "text": instruction},
+                        {"type": "image_url", "image_url": {"url": attachment["dataUrl"]}},
+                    ]
                 response = self.client.chat.completions.create(
                     model=settings.FIREWORKS_MODEL,
                     temperature=0.0,
@@ -883,7 +1135,7 @@ class FireworksProvider(LLMProvider):
                             "role": "system",
                             "content": "You are a rigorous curriculum architect. Return only JSON matching the supplied schema. Use only the supplied source candidates. Never invent citations, quotes, facts, or source IDs. Draft content may require human review.",
                         },
-                        {"role": "user", "content": instruction},
+                        {"role": "user", "content": user_content},
                     ],
                     response_format={
                         "type": "json_schema",
@@ -898,7 +1150,7 @@ class FireworksProvider(LLMProvider):
                 # Qwen occasionally emits literal newlines inside long string
                 # fields despite JSON-schema mode. Permit control characters;
                 # the typed manifest and source validators remain authoritative.
-                return json.loads(message, strict=False)
+                return load_provider_json(message)
             except ProviderOutputError:
                 raise
             except json.JSONDecodeError as exc:
@@ -926,25 +1178,33 @@ class FireworksProvider(LLMProvider):
         compact_spans = [
             {
                 "sourceId": span.get("sourceId"),
+                "sourceKind": span.get("sourceKind"),
                 "candidateId": span.get("candidateId"),
-                "text": str(span.get("text") or "")[:750],
+                "text": str(span.get("text") or "")[:500],
                 "page": span.get("page"),
                 "locator": span.get("locator"),
             }
             for span in request.source_spans
             if isinstance(span, dict) and span.get("candidateId")
         ]
-        source_context = json.dumps(compact_spans[:10], ensure_ascii=False)[:12000]
+        source_context = json.dumps(compact_spans[:40], ensure_ascii=False)[:20000]
         instruction = (
             f"Build a complete first learning module for subject '{request.subject_title or request.subject_id}'. "
             f"Chapter selection: {request.chapter_selection}. Source pack IDs: {request.source_ids}. "
             f"Only these source anchor IDs may be used: {allowed_anchor_ids}. "
-            "Return exactly four scenes, in this order: one whiteboard, one predict_checkpoint, one retrieval, and one teach_back. "
-            "Each scene must be a concise but complete learner-ready step: explanation under 1,200 characters, one or two short whiteboard actions, and one approved source anchor. "
-            "The whiteboard scene has checkpoint null. Each interactive scene has one checkpoint with a concise learner-facing prompt and a response type. "
-            "Do not include two_d, three_d, exam_bridge, question_bank, charts, or other optional features in this first manifest. "
-            "Set every config object to {}. Optional visuals and exam practice are generated only when the learner asks after the module opens. "
-            "Every outline item and scene must cite at least one supplied anchor. "
+            "Return one topic scene per numbered section or subsection found in the source, preserving ascending source order. If the source has sections such as 1.1, 1.2, and 1.3, return those as separate topics and begin each title with the exact section label. Do not merge 1.1, 1.2, and 1.3 into one broad concept and do not invent extra topics. "
+            "Do not make the scenes generic lesson headings: each topic must teach and test one concrete idea from its own section. "
+            "Every topic scene must have exactly four stages in this order: definition, mcq, one application stage whose kind is formula, diagram, or numerical, and teach_back. "
+            "The definition stage explains the topic and uses responseType none. The mcq stage must test a specific idea from that section, use exactly 3 or 4 plausible text options, use responseType single_choice, and include distractors based on realistic misconceptions rather than vague or trivially wrong choices. Never include answer keys or isCorrect fields. "
+            "The application stage must ask the learner to write a formula, solve a numerical problem, or upload/draw a block diagram; use responseType long_text for formula/numerical and file for diagram. "
+            "The teach_back stage asks the learner to explain the idea in their own words with responseType long_text. "
+            "Each topic must also include a substantial explanation, 3-6 keyPoints, a workedExample when the source supports one, 2-4 commonMistakes, and 4-6 whiteboard actions. "
+            "Whiteboard actions must build the idea step by step: identify terms, show the mechanism or derivation, connect the representation, apply it, and call out a likely mistake. "
+            "Use a model-authored config visual when the source supports a figure, block diagram, graph, process, or relationship; use points for graphs or nodes/edges for diagrams, never external image URLs. "
+            "Keep all explanations and prompts concrete, source-grounded, and free of repeated individual characters or words. Never include isCorrect, answer keys, or correctness flags in learner-facing options. "
+            "Each topic needs one approved source anchor and a null top-level checkpoint because stages contain the assessments. "
+            "Use type topic for every scene and keep all stage/source IDs server-owned. "
+            f"Past-question source IDs: {request.past_question_source_ids or []}. If past-question sources are present, return up to six concise patterns in pastQuestionAnalysis and make application stages reflect those patterns; otherwise return an empty list. "
             f"Source candidates (candidate text is not automatically approved evidence): {source_context}"
         )
         raw_result = self._chat_json(instruction, "study_manifest_v3", schema)
@@ -963,6 +1223,149 @@ class FireworksProvider(LLMProvider):
         result = normalize_live_study_plan(raw_result, request)
         result.setdefault("scenes", [])
         missing = missing_required_scene_types(result)
+        if missing and any(scene.get("stages") for scene in result.get("scenes", []) if isinstance(scene, dict)):
+            # Qwen can satisfy the top-level manifest schema while dropping one
+            # or more stages from a topic. Repair those small omissions with
+            # stage-only requests instead of discarding an otherwise usable
+            # module.
+            if "formula_or_diagram_or_numerical" in missing:
+                application_schema = assessment_stage_schema(allowed_anchor_ids, max_prompt_length=520)
+                application_schema["properties"]["kind"] = {
+                    "type": "string",
+                    "enum": ["formula", "diagram", "numerical"],
+                }
+                application_kinds = {"formula", "diagram", "numerical"}
+                for scene in result.get("scenes", []):
+                    if not isinstance(scene, dict):
+                        continue
+                    stages = [stage for stage in scene.get("stages", []) if isinstance(stage, dict)]
+                    if any(stage.get("kind") in application_kinds for stage in stages):
+                        continue
+                    repair_instruction = (
+                        f"Return exactly one practical application assessment stage for the topic '{scene.get('title')}'. "
+                        "The kind MUST be exactly one of formula, numerical, or diagram. "
+                        "Choose formula when the learner should write or apply an equation, numerical when they should solve a short calculation, "
+                        "and diagram when they should submit a block diagram. Use responseType long_text for formula or numerical and file for diagram. "
+                        "The prompt must test application of this topic, not ask the learner to repeat its definition. "
+                        f"Use only approved source anchor IDs {allowed_anchor_ids}. "
+                        f"Source candidates: {source_context[:12000]}"
+                    )
+                    for repair_attempt in range(2):
+                        repaired_stage = self._chat_json(
+                            repair_instruction + (" Return a single plain stage object with prompt, responseType, and sourceAnchorIds." if repair_attempt else ""),
+                            f"study_application_stage_v{repair_attempt + 1}",
+                            application_schema,
+                        )
+                        if not isinstance(repaired_stage, dict):
+                            continue
+                        raw_kind = repaired_stage.get("kind") or repaired_stage.get("stageKind") or repaired_stage.get("type")
+                        raw_prompt = repaired_stage.get("prompt") or repaired_stage.get("stem") or repaired_stage.get("question")
+                        candidate_kind = str(raw_kind or "formula")
+                        if candidate_kind not in application_kinds:
+                            candidate_kind = "diagram" if str(repaired_stage.get("responseType") or "").lower() == "file" else "formula"
+                        if not str(raw_prompt or "").strip():
+                            continue
+                        repaired_stage["kind"] = candidate_kind
+                        repaired_stage["prompt"] = str(raw_prompt).strip()
+                        repaired_stage["responseType"] = "file" if candidate_kind == "diagram" else "long_text"
+                        repaired_stage["options"] = None
+                        repaired_stage["stageId"] = f"{scene.get('sceneId', 'topic')}-application"
+                        repaired_stage["title"] = str(repaired_stage.get("title") or "Apply the idea").strip()
+                        repaired_stage["sourceAnchorIds"] = list(
+                            repaired_stage.get("sourceAnchorIds")
+                            or repaired_stage.get("sourceAnchors")
+                            or scene.get("sourceAnchorIds")
+                            or allowed_anchor_ids[:1]
+                        )[:3]
+                        stages.append(repaired_stage)
+                        scene["stages"] = stages
+                        break
+                result = normalize_live_study_plan(result, request)
+                missing = missing_required_scene_types(result)
+            stage_repairs = {
+                "definition": {
+                    "responseType": "none",
+                    "instruction": "Explain the topic clearly in learner-friendly language and identify the central idea.",
+                },
+                "mcq": {
+                    "responseType": "single_choice",
+                    "instruction": "Write one source-grounded multiple-choice question with exactly 3 or 4 plausible text options. Do not include option IDs, isCorrect, answer keys, or correctness flags.",
+                },
+                "teach_back": {
+                    "responseType": "long_text",
+                    "instruction": "Ask the learner to explain the topic in their own words and connect it to the source-grounded idea.",
+                },
+            }
+            for missing_kind, repair_spec in stage_repairs.items():
+                if missing_kind not in missing:
+                    continue
+                stage_schema = assessment_stage_schema(allowed_anchor_ids, max_prompt_length=520)
+                stage_schema["properties"]["kind"] = {"type": "string", "enum": [missing_kind]}
+                stage_schema["properties"]["responseType"] = {"type": "string", "enum": [repair_spec["responseType"]]}
+                if missing_kind == "mcq":
+                    stage_schema["properties"]["options"]["minItems"] = 3
+                    stage_schema["properties"]["options"]["maxItems"] = 4
+                else:
+                    stage_schema["properties"]["options"] = {"type": ["array", "null"], "maxItems": 0, "items": {"type": "string"}}
+                for scene in result.get("scenes", []):
+                    if not isinstance(scene, dict):
+                        continue
+                    stages = [stage for stage in scene.get("stages", []) if isinstance(stage, dict)]
+                    if any(stage.get("kind") == missing_kind for stage in stages):
+                        continue
+                    repair_instruction = (
+                        f"Return exactly one {missing_kind} assessment stage for the topic '{scene.get('title')}'. "
+                        f"{repair_spec['instruction']} "
+                        f"Use responseType {repair_spec['responseType']} and only approved source anchor IDs {allowed_anchor_ids}. "
+                        f"Source candidates: {source_context[:12000]}"
+                    )
+                    repair_attempts = 2
+                    for repair_attempt in range(repair_attempts):
+                        retry_note = (
+                            " The previous response was not usable. Return a normal learner-facing MCQ with a prompt and 3 or 4 plain-text options; never return option objects, option IDs, isCorrect, or an answer key."
+                            if repair_attempt
+                            else ""
+                        )
+                        repaired_stage = self._chat_json(
+                            repair_instruction + retry_note,
+                            f"study_{missing_kind}_stage_v{repair_attempt + 1}",
+                            stage_schema,
+                        )
+                        if not isinstance(repaired_stage, dict):
+                            continue
+                        options = normalize_answer_options(repaired_stage.get("options") or repaired_stage.get("choices"))
+                        raw_prompt = repaired_stage.get("prompt") or repaired_stage.get("stem") or repaired_stage.get("question")
+                        if missing_kind == "mcq":
+                            # Qwen sometimes returns option records even when
+                            # the schema asks for strings, and may omit the
+                            # structural enum fields. The option text is still
+                            # usable, so normalize it and repair only metadata
+                            # that is owned by the server/assessment ladder.
+                            if not str(raw_prompt or "").strip() or not options or len(options) < 3:
+                                continue
+                            repaired_stage["kind"] = "mcq"
+                            repaired_stage["responseType"] = "single_choice"
+                        elif not str(raw_prompt or "").strip():
+                            continue
+                        else:
+                            repaired_stage["kind"] = missing_kind
+                            repaired_stage["responseType"] = repair_spec["responseType"]
+                        repaired_stage["prompt"] = str(raw_prompt).strip()
+                        repaired_stage["options"] = options
+                        repaired_stage["stageId"] = f"{scene.get('sceneId', 'topic')}-{missing_kind}"
+                        if not str(repaired_stage.get("title") or "").strip():
+                            repaired_stage["title"] = f"{scene.get('title') or 'Topic'} assessment"
+                        if not isinstance(repaired_stage.get("sourceAnchorIds"), list) or not repaired_stage.get("sourceAnchorIds"):
+                            scene_anchors = scene.get("sourceAnchorIds") if isinstance(scene.get("sourceAnchorIds"), list) else []
+                            repaired_stage["sourceAnchorIds"] = list(repaired_stage.get("sourceAnchors") or scene_anchors[:3] or allowed_anchor_ids[:1])
+                        stages.append(repaired_stage)
+                        scene["stages"] = stages
+                        break
+            if stage_repairs and any(item in missing for item in stage_repairs):
+                result = normalize_live_study_plan(result, request)
+                missing = missing_required_scene_types(result)
+            if missing:
+                raise ProviderOutputError(f"live study module is missing assessment stages: {', '.join(missing)}")
         if missing:
             # Repair fragments use the rich scene contract rather than the
             # intentionally shallow top-level Qwen schema. This keeps a
@@ -984,7 +1387,7 @@ class FireworksProvider(LLMProvider):
                     repair_instruction = (
                         f"Return exactly one learner-ready scene object for subject '{request.subject_title or request.subject_id}'. "
                         f"Its type field MUST be exactly '{target_type}'. Do not use exam_bridge as a substitute. "
-                        "Include a clear explanation, at least one action with a payload, and a checkpoint when the scene type is interactive. "
+                        "Include a clear explanation, 3 key points, a worked example or null, 2 common mistakes, at least one action with a payload, and a checkpoint when the scene type is interactive. "
                         f"Use only approved anchor IDs {allowed_anchor_ids}.{visual_requirements}{retry_note} "
                         f"Source candidates: {source_context[:50000]}"
                     )

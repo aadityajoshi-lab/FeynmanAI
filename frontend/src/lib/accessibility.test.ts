@@ -16,8 +16,8 @@ describe("generated study workspace accessibility contract", () => {
 
   it("keeps generated checkpoint controls keyboard and screen-reader addressable", () => {
     expect(surface).toContain('role="radiogroup"');
-    expect(surface).toContain('aria-label={activeScene.checkpoint.prompt}');
+    expect(surface).toContain('aria-label={activeStage.prompt}');
     expect(surface).toContain('role="status"');
-    expect(surface).toContain('aria-label={activeScene.checkpoint?.prompt || activeScene.title}');
+    expect(surface).toContain('aria-label={activeStage.prompt}');
   });
 });

@@ -31,6 +31,8 @@ export default function StudyIntake() {
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [assets, setAssets] = useState<StudyAsset[]>([]);
   const [files, setFiles] = useState<File[]>([]);
+  const [pastQuestionAssets, setPastQuestionAssets] = useState<StudyAsset[]>([]);
+  const [pastQuestionFiles, setPastQuestionFiles] = useState<File[]>([]);
   const [sourceUrl, setSourceUrl] = useState("");
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
@@ -49,7 +51,7 @@ export default function StudyIntake() {
     }).catch(() => setError("The provider status could not be loaded. Check that Django is running."));
   }, []);
 
-  function addFiles(selected: FileList | File[]) {
+  function addFiles(selected: FileList | File[], target: "notes" | "past_questions" = "notes") {
     const next: StudyAsset[] = [];
     const acceptedFiles: File[] = [];
     for (const file of Array.from(selected)) {
@@ -61,12 +63,17 @@ export default function StudyIntake() {
         setError(`${file.name} is larger than the 50 MB upload limit.`);
         continue;
       }
-      next.push({ id: `upload-${file.name}-${file.lastModified}`, name: file.name, kind: assetKind(file.type), status: "review_required" });
+      next.push({ id: `${target}-${file.name}-${file.lastModified}`, name: file.name, kind: assetKind(file.type), status: "review_required" });
       acceptedFiles.push(file);
     }
     if (next.length) {
-      setAssets((current) => [...current, ...next]);
-      setFiles((current) => [...current, ...acceptedFiles]);
+      if (target === "past_questions") {
+        setPastQuestionAssets((current) => [...current, ...next]);
+        setPastQuestionFiles((current) => [...current, ...acceptedFiles]);
+      } else {
+        setAssets((current) => [...current, ...next]);
+        setFiles((current) => [...current, ...acceptedFiles]);
+      }
       setError("");
     }
   }
@@ -86,17 +93,19 @@ export default function StudyIntake() {
     setError("");
     try {
       if (!subjectTitle.trim()) throw new Error("Name the subject before opening the study desk.");
-      if (!files.length && !sourceUrl.trim()) throw new Error("Add at least one PDF, image, audio, video, or source URL.");
+      if (!files.length && !pastQuestionFiles.length && !sourceUrl.trim()) throw new Error("Add at least one note or source URL. Past questions are optional.");
       if (!selectedProvider?.available) throw new Error("The selected live provider is not configured on the server.");
       const subjectId = slugify(subjectTitle);
       const moduleId = slugify(moduleFocus) || (chapterSelection === "all" ? "full-source-pack" : "selected-module");
       setBuildStage("uploading");
-      const uploaded: StudySourceIngestResponse[] = await Promise.all(files.map((file) => ingestStudySource(file, { subjectId, moduleId })));
+      const uploadedNotes: StudySourceIngestResponse[] = await Promise.all(files.map((file) => ingestStudySource(file, { subjectId, moduleId, sourceKind: "notes" })));
+      const uploadedPastQuestions: StudySourceIngestResponse[] = await Promise.all(pastQuestionFiles.map((file) => ingestStudySource(file, { subjectId, moduleId, sourceKind: "past_questions" })));
+      const uploaded: StudySourceIngestResponse[] = [...uploadedNotes, ...uploadedPastQuestions];
       if (sourceUrl.trim()) uploaded.push(await ingestStudyUrl(sourceUrl.trim(), { subjectId, moduleId, sourceKind: "website" }));
       const sourceIds = uploaded.map((item) => item.sourceId);
       if (!sourceIds.length) throw new Error("No source was accepted by the authoring pipeline.");
       setBuildStage("authoring");
-      const plan = await generateStudyPlan({ subjectId, subjectTitle: subjectTitle.trim(), moduleId, sourceIds, chapterSelection, provider });
+      const plan = await generateStudyPlan({ subjectId, subjectTitle: subjectTitle.trim(), moduleId, sourceIds, pastQuestionSourceIds: uploadedPastQuestions.map((item) => item.sourceId), chapterSelection, provider });
       setBuildStage("validating");
       const draft = {
         version: "study-draft-v2",
@@ -107,7 +116,8 @@ export default function StudyIntake() {
         provider,
         providerMode: plan.providerMode,
         sourceIds,
-        assets,
+        assets: [...assets, ...pastQuestionAssets],
+        pastQuestionSourceIds: uploadedPastQuestions.map((item) => item.sourceId),
         learningMode,
         plan,
         uploadReview: uploaded.map((item) => ({ sourceId: item.sourceId, filename: item.filename, approvalStatus: item.approvalStatus, extraction: item.extraction })),
@@ -164,11 +174,22 @@ export default function StudyIntake() {
             </ul>
             <label className="study-select-label" htmlFor="study-source-url">Or add a website or paper URL</label>
             <input id="study-source-url" className="study-text-input" value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} placeholder="https://..." inputMode="url" />
-            <p className="study-mode-description">Uploads are extracted into candidate spans. Transcription/OCR assets remain visible as pipeline states until ready.</p>
+            <p className="study-mode-description">You can upload multiple notes/resources. Each file is extracted into server-owned candidate spans before lesson authoring.</p>
           </section>
 
           <section className="study-intake-block">
-            <div className="study-block-heading"><span>03</span><div><h2>Where should we begin?</h2><p>Choose a scope, then optionally name the chapter, unit, or lesson focus.</p></div></div>
+            <div className="study-block-heading"><span>03</span><div><h2>Past questions <span>(optional)</span></h2><p>Upload previous exams, assignments, or question banks so the module can identify recurring patterns and prepare application checks around them.</p></div></div>
+            <div className="study-dropzone study-dropzone-secondary" onDragEnter={(event) => { event.preventDefault(); setDragging(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); addFiles(event.dataTransfer.files, "past_questions"); }}>
+              <input id="study-past-question-files" type="file" accept=".pdf,image/png,image/jpeg,image/webp" multiple onChange={(event) => { if (event.target.files) addFiles(event.target.files, "past_questions"); }} />
+              <label htmlFor="study-past-question-files"><strong>Add past questions for analysis</strong><span>Optional — PDF or image files</span><small>The learner will not see answer keys before attempting a question.</small></label>
+            </div>
+            <ul className="study-asset-list" aria-label="Selected past question resources">
+              {pastQuestionAssets.map((asset) => <li key={asset.id}><span className="study-asset-type">past</span><span className="study-asset-name">{asset.name}</span><span className="study-asset-status review_required">analysis</span></li>)}
+            </ul>
+          </section>
+
+          <section className="study-intake-block">
+            <div className="study-block-heading"><span>04</span><div><h2>Where should we begin?</h2><p>Choose a scope, then optionally name the chapter, unit, or lesson focus.</p></div></div>
             <label className={`study-choice-row ${chapterSelection === "chapter_1" ? "selected" : ""}`}><input type="radio" name="scope" value="chapter_1" checked={chapterSelection === "chapter_1"} onChange={() => setChapterSelection("chapter_1")} /><span><strong>One chapter or module</strong><small>Build a focused first learning path from the selected material.</small></span><em>focused</em></label>
             <label className={`study-choice-row ${chapterSelection === "all" ? "selected" : ""}`}><input type="radio" name="scope" value="all" checked={chapterSelection === "all"} onChange={() => setChapterSelection("all")} /><span><strong>All selected material</strong><small>Let the provider map the full source collection into a sequence.</small></span><em>full pack</em></label>
             <label className="study-select-label" htmlFor="module-focus">Chapter or module focus <span>(optional)</span></label>
@@ -176,21 +197,21 @@ export default function StudyIntake() {
           </section>
 
           <section className="study-intake-block">
-            <div className="study-block-heading"><span>04</span><div><h2>Which live model should build it?</h2><p>Keys stay on the server. Fixture output is not offered in the learner flow.</p></div></div>
+            <div className="study-block-heading"><span>05</span><div><h2>Which live model should build it?</h2><p>Keys stay on the server. Fixture output is not offered in the learner flow.</p></div></div>
             <div className="study-provider-list" role="radiogroup" aria-label="Live module builder provider">
               {liveProviders.map((item) => <label key={item.id} className={`study-provider-row ${provider === item.id ? "selected" : ""} ${item.available ? "" : "disabled"}`}><input type="radio" name="provider" value={item.id} checked={provider === item.id} disabled={!item.available} onChange={() => setProvider(item.id)} /><span><strong>{item.label}</strong><small>{item.model}</small></span><em>{item.available ? "available" : "key unavailable"}</em></label>)}
             </div>
           </section>
 
           <section className="study-intake-block">
-            <div className="study-block-heading"><span>05</span><div><h2>How do you want to start?</h2><p>This is a learner preference, not a fixed learning-style label.</p></div></div>
+            <div className="study-block-heading"><span>06</span><div><h2>How do you want to start?</h2><p>This is a learner preference, not a fixed learning-style label.</p></div></div>
             <label className="study-select-label" htmlFor="study-mode">Learning approach</label>
             <select id="study-mode" className="study-select" value={learningMode} onChange={(event) => setLearningMode(event.target.value)}>{studyModes.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select>
             <p className="study-mode-description">{mode.description}</p>
           </section>
 
           {error && <p className="study-form-error" role="alert">{error}</p>}
-          <div className="study-intake-submit"><div><strong>{moduleFocus.trim() || (chapterSelection === "all" ? "Complete source pack" : "Selected module")}</strong><span>{assets.length} material item{assets.length === 1 ? "" : "s"} / {mode.label}</span></div><button className="study-solid-button" type="button" onClick={startStudy} disabled={starting || !selectedProvider?.available}>{starting ? "Building module..." : "Build my study module -&gt;"}</button></div>
+          <div className="study-intake-submit"><div><strong>{moduleFocus.trim() || (chapterSelection === "all" ? "Complete source pack" : "Selected module")}</strong><span>{assets.length + pastQuestionAssets.length} material item{assets.length + pastQuestionAssets.length === 1 ? "" : "s"} / {mode.label}</span></div><button className="study-solid-button" type="button" onClick={startStudy} disabled={starting || !selectedProvider?.available}>{starting ? "Building module..." : "Build my study module -&gt;"}</button></div>
         </div>
       </section>
       {starting && <div className="study-build-overlay" role="status" aria-live="polite" aria-busy="true">

@@ -30,3 +30,17 @@ def test_extract_pdf_candidates_reports_parse_failure(tmp_path: Path):
     asset.write_bytes(b"%PDF-1.4 fixture")
     with pytest.raises(IngestionError, match="unable to extract PDF text"):
         extract_pdf_candidates(asset)
+
+
+def test_normalize_extracted_text_removes_duplicate_pdf_glyphs():
+    from teachback.ingestion import normalize_extracted_text
+
+    text = "AAnnaalloogg vvss.. DDiiggiittaall IInnssttrruummeennttss"
+
+    assert normalize_extracted_text(text) == "Analog vs. Digital Instruments"
+
+
+def test_normalize_extracted_text_preserves_normal_double_letters():
+    from teachback.ingestion import normalize_extracted_text
+
+    assert normalize_extracted_text("A book about analog signals") == "A book about analog signals"

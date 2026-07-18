@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
+import re
+import unicodedata
 from io import BytesIO
 from dataclasses import dataclass
 from pathlib import Path
@@ -70,6 +72,33 @@ class CandidateSpan:
     text: str
     locator: dict
     status: str = "candidate"
+
+
+def normalize_extracted_text(text: str) -> str:
+    """Clean common PDF text-layer artifacts before a model sees the source.
+
+    Some lecture PDFs contain every glyph twice in the text layer even though
+    the page looks normal. Passing that artifact through produces titles such
+    as ``AAnnaalloogg`` and makes the generated lesson unusable. We only apply
+    duplicate-glyph collapsing when the whole extracted page shows a strong
+    duplicate signal, so ordinary words such as ``book`` are left alone.
+    """
+
+    normalized = unicodedata.normalize("NFKC", text or "")
+    normalized = normalized.replace("\u00ad", "")
+    normalized = re.sub(r"(?<=\w)-\s+(?=\w)", "", normalized)
+    normalized = " ".join(normalized.split())
+    letters = [char for char in normalized if char.isalpha()]
+    duplicate_pairs = sum(
+        1
+        for left, right in zip(normalized, normalized[1:])
+        if left.isalpha() and left.casefold() == right.casefold()
+    )
+    duplicate_ratio = duplicate_pairs / max(len(letters), 1)
+    if duplicate_ratio >= 0.18:
+        normalized = re.sub(r"([A-Za-z])\1", r"\1", normalized)
+        normalized = re.sub(r"([.!?,;:])\1+", r"\1", normalized)
+    return " ".join(normalized.split()).strip()
 
 
 def inspect_asset(path: str | Path, *, max_bytes: int = MAX_SOURCE_BYTES) -> AssetMetadata:
@@ -155,7 +184,11 @@ def extract_pdf_candidates_from_bytes(payload: bytes, *, sha256: str) -> list[Ca
         reader = PdfReader(BytesIO(payload))
         spans: list[CandidateSpan] = []
         for page_number, page in enumerate(reader.pages, start=1):
-            text = " ".join((page.extract_text() or "").split())
+            try:
+                extracted = page.extract_text(extraction_mode="layout") or ""
+            except TypeError:  # pragma: no cover - older pypdf compatibility
+                extracted = page.extract_text() or ""
+            text = normalize_extracted_text(extracted)
             if text:
                 spans.append(CandidateSpan(text=text, locator={"kind": "pdf-page", "page": page_number, "sha256": sha256}))
         return spans
