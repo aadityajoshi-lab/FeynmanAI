@@ -31,6 +31,11 @@ export type StudyCheckpoint = { kind: "predict" | "retrieval" | "teach_back" | "
 export type StudyStage = { stageId: string; kind: "definition" | "mcq" | "formula" | "diagram" | "numerical" | "teach_back"; title: string; prompt: string; responseType: "none" | "single_choice" | "short_text" | "long_text" | "file"; options?: string[] | null; sourceAnchorIds: string[] };
 export type StudyScene = { sceneId: string; conceptId: string; type: string; title: string; explanation?: string; keyPoints?: string[]; workedExample?: string | null; commonMistakes?: string[]; sourceAnchorIds: string[]; actions?: StudyAction[]; config?: Record<string, unknown>; checkpoint?: StudyCheckpoint | null; stages?: StudyStage[] };
 export type StudyInteractionResponse = { state?: string; prediction?: string; explanation?: string; prompt?: string; answer?: string; reasonCode?: string; correct?: boolean; understandingScore?: number; confidenceScore?: number; overconfidence?: boolean; feedback?: string; remediation?: string; mistake?: string; correctAnswer?: string; correction?: string; nextAction?: "advance" | "retry" | "review"; retryPrompt?: string | null; retryOptions?: string[] | null; retryResponseType?: StudyStage["responseType"] | null; retrySourceAnchorIds?: string[]; sourceAnchorIds: string[]; providerMode: "codex_fixture" | "live_openai" | "live_fireworks" | "human_review"; sourcePackVersion: string; recordVersion: number; reviewRequired?: boolean };
+export type StudyRemediationVideoClip = { index: number; title: string; url: string; duration: number; width: number; height: number; poster?: string; narration?: { dataUrl: string; format: string; providerId: string; text: string } };
+export type StudyRemediationSlide = { index: number; title: string; body: string; bullets: string[]; narration: string; durationSeconds: number; sourceAnchorIds: string[]; diagram?: { nodes: Array<{ id: string; label: string }>; edges: Array<{ from: string; to: string }> }; audio?: { dataUrl: string; format: string; providerId: string; text: string } };
+export type StudyRemediationVideo = { mode: "fireworks_slides"; title: string; requestedDurationSeconds: number; actualDurationSeconds: number; providerId: string; voiceProviderId?: string | null; slides: StudyRemediationSlide[] } | { mode: "sequenced_clips"; title: string; requestedDurationSeconds: number; actualDurationSeconds: number; providerId: string; clips: StudyRemediationVideoClip[] };
+export type StudyRemediationVideoResponse = { success?: boolean; remediationVideo: StudyRemediationVideo; sourcePackVersion: string; sourceAnchorIds: string[]; reviewRequired?: boolean };
+export type StudyRemediationVideoConfig = { mode: "fireworks_slides" | "sequenced_clips"; provider: string; label: string; configured: boolean; voiceConfigured: boolean; minDurationSeconds: number; maxDurationSeconds: number };
 export type StudyChatAction = { kind: "none" | "next_scene" | "previous_scene" | "open_scene" | "focus_checkpoint" | "show_visualization" | "repeat_explanation" | "set_learning_mode"; sceneId?: string | null; modeId?: string | null; reason?: string };
 export type StudyChatMessage = { role: "user" | "assistant"; content: string };
 export type StudyChatResponse = { state: "answered" | "abstained" | "needs_human_review" | "action_only"; reply: string; reasonCode?: string | null; sourceAnchorIds: string[]; action: StudyChatAction; providerMode: "codex_fixture" | "live_openai" | "live_fireworks" | "human_review"; sourcePackVersion: string; recordVersion: number; reviewRequired?: boolean };
@@ -41,8 +46,8 @@ const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000
 
 async function parseError(response: Response, fallback: string) {
   try {
-    const body = await response.json() as { error?: { message?: string } };
-    return body.error?.message || fallback;
+    const body = await response.json() as { error?: { message?: string } | string; message?: string };
+    return (typeof body.error === "string" ? body.error : body.error?.message) || body.message || fallback;
   } catch {
     return fallback;
   }
@@ -93,6 +98,30 @@ export async function interactWithStudyPlan(input: { sourceIds: string[]; provid
   });
   if (!response.ok) throw new Error(await parseError(response, `Checkpoint failed (${response.status})`));
   return response.json() as Promise<StudyInteractionResponse>;
+}
+
+export async function generateRemediationVideo(input: {
+  sourceIds: string[];
+  requestedDurationSeconds?: number;
+  mistake: string;
+  correctAnswer: string;
+  correction: string;
+  remediation?: string;
+  scene: { sceneId: string; title?: string; stageKind?: string; sourceAnchorIds: string[] };
+}): Promise<StudyRemediationVideoResponse> {
+  const response = await fetch(`${API_BASE}/study-plans/remediation-video`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) throw new Error(await parseError(response, `Remediation video failed (${response.status})`));
+  return response.json() as Promise<StudyRemediationVideoResponse>;
+}
+
+export async function getRemediationVideoConfig(): Promise<StudyRemediationVideoConfig> {
+  const response = await fetch(`${API_BASE}/study-plans/remediation-video/config`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`Video capability status failed (${response.status})`);
+  return response.json() as Promise<StudyRemediationVideoConfig>;
 }
 
 export async function chatWithStudyPlan(input: {

@@ -69,6 +69,14 @@ FIREWORKS_BASE_URL = configured("FIREWORKS_BASE_URL", "https://api.fireworks.ai/
 # four assessment stages per topic. Qwen can need more than a minute for that
 # structured response, so allow a longer provider window by default.
 FIREWORKS_TIMEOUT_SECONDS = float(configured("FIREWORKS_TIMEOUT_SECONDS", "240"))
+REMEDIATION_VIDEO_PROVIDER = configured("REMEDIATION_VIDEO_PROVIDER", "fireworks-slides").lower()
+VIDEO_SERVICE_BASE_URL = configured("VIDEO_SERVICE_BASE_URL", "http://127.0.0.1:3000")
+VIDEO_SERVICE_KEY = configured("VIDEO_SERVICE_KEY", "feynman-local-video")
+VIDEO_SERVICE_TIMEOUT_SECONDS = float(configured("VIDEO_SERVICE_TIMEOUT_SECONDS", "900"))
+TTS_VOXCPM_BASE_URL = configured("TTS_VOXCPM_BASE_URL", "")
+TTS_VOXCPM_API_KEY = configured("TTS_VOXCPM_API_KEY", "")
+TTS_VOXCPM_TIMEOUT_SECONDS = float(configured("TTS_VOXCPM_TIMEOUT_SECONDS", "90"))
+TTS_VOXCPM_PROMPT = configured("TTS_VOXCPM_PROMPT", "natural, clear engineering classroom voice")
 # The bounded study-source endpoint validates uploads at 50 MiB. Keep the
 # request parser just above that ceiling and spool larger files to disk rather
 # than rejecting ordinary lecture PDFs before the endpoint can inspect them.

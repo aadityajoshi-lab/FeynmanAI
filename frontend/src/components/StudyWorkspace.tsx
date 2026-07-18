@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { studyModes } from "@/lib/learningModes";
-import { chatWithStudyPlan, interactWithStudyPlan, StudyChatMessage, StudyChatResponse, StudyInteractionResponse, StudyPlanResponse, StudyScene, StudyStage } from "@/lib/studyApi";
+import { chatWithStudyPlan, generateRemediationVideo, interactWithStudyPlan, StudyChatMessage, StudyChatResponse, StudyInteractionResponse, StudyPlanResponse, StudyRemediationVideo, StudyScene, StudyStage } from "@/lib/studyApi";
 import type { StudyAsset } from "@/lib/studyTypes";
 
 type StudyDraft = {
@@ -17,10 +17,13 @@ type StudyDraft = {
   sourceIds?: string[];
   assets?: StudyAsset[];
   learningMode?: string;
+  remediationVideoDurationSeconds?: number;
+  remediationVideoConfig?: { mode: "fireworks_slides" | "sequenced_clips"; label: string; provider: string; configured: boolean; voiceConfigured: boolean };
   plan?: StudyPlanResponse;
 };
 
 type ChatUiMessage = StudyChatMessage & { response?: StudyChatResponse };
+type VideoUiState = { status: "idle" | "loading" | "ready" | "error"; video?: StudyRemediationVideo; error?: string };
 
 function displayValue(value: unknown): ReactNode {
   if (value === null || value === undefined) return null;
@@ -36,10 +39,48 @@ function PayloadView({ payload }: { payload: Record<string, unknown> }) {
 }
 
 function GeneratedVisual({ config }: { config?: Record<string, unknown> }) {
-  const source = config || {};
+  const container = config || {};
+  const source = container.visual && typeof container.visual === "object" ? container.visual as Record<string, unknown> : container;
+  const [focusIndex, setFocusIndex] = useState(0);
   const rawPoints = Array.isArray(source.points) ? source.points : [];
   const rawNodes = Array.isArray(source.nodes) ? source.nodes : [];
   const rawEdges = Array.isArray(source.edges) ? source.edges : [];
+  const sourceNodes = rawNodes.map((node, index) => {
+    if (!node || typeof node !== "object") return null;
+    const item = node as Record<string, unknown>;
+    const x = Number(item.x);
+    const y = Number(item.y);
+    return { id: String(item.id || `node-${index}`), label: String(item.label || item.title || item.id || `Step ${index + 1}`), description: item.description ? String(item.description) : "", x: Number.isFinite(x) ? x : null, y: Number.isFinite(y) ? y : null };
+  }).filter((node): node is { id: string; label: string; description: string; x: number | null; y: number | null } => Boolean(node));
+  const coordinateRangeX = sourceNodes.length ? Math.max(...sourceNodes.map((node) => node.x ?? 0)) - Math.min(...sourceNodes.map((node) => node.x ?? 0)) : 0;
+  const coordinateRangeY = sourceNodes.length ? Math.max(...sourceNodes.map((node) => node.y ?? 0)) - Math.min(...sourceNodes.map((node) => node.y ?? 0)) : 0;
+  const useModelCoordinates = sourceNodes.length > 0 && coordinateRangeY > 0;
+  const nodes: Array<{ id: string; label: string; description: string; x: number; y: number }> = sourceNodes.map((node, index) => {
+    if (useModelCoordinates && node.x !== null && node.y !== null) return { ...node, x: node.x, y: node.y };
+    const columns = sourceNodes.length > 5 ? 3 : Math.min(4, sourceNodes.length);
+    return { ...node, x: 150 + (index % columns) * 300, y: 110 + Math.floor(index / columns) * 165 };
+  });
+  const nodeWidth = 230;
+  const nodeHeight = 92;
+  const canvasWidth = nodes.length > 5 ? 980 : 960;
+  const canvasHeight = Math.max(520, 205 + Math.ceil(nodes.length / (nodes.length > 5 ? 3 : Math.min(4, Math.max(1, nodes.length)))) * 165);
+  const nodeMinX = nodes.length ? Math.min(...nodes.map((node) => node.x)) : 0;
+  const nodeMaxX = nodes.length ? Math.max(...nodes.map((node) => node.x)) : 1;
+  const nodeMinY = nodes.length ? Math.min(...nodes.map((node) => node.y)) : 0;
+  const nodeMaxY = nodes.length ? Math.max(...nodes.map((node) => node.y)) : 1;
+  const nodeRangeX = nodeMaxX - nodeMinX || 1;
+  const nodeRangeY = nodeMaxY - nodeMinY || 1;
+  const diagramPosition = (node: { x: number; y: number }) => ({ x: 130 + ((node.x - nodeMinX) / nodeRangeX) * (canvasWidth - 260), y: 90 + ((node.y - nodeMinY) / nodeRangeY) * (canvasHeight - 180) });
+  const wrapLabel = (label: string, maxLength = 19) => {
+    const words = label.split(/\s+/);
+    const lines: string[] = [];
+    let line = "";
+    words.forEach((word) => {
+      if (line && `${line} ${word}`.length > maxLength) { lines.push(line); line = word; } else { line = line ? `${line} ${word}` : word; }
+    });
+    if (line) lines.push(line);
+    return lines.slice(0, 3);
+  };
   const points = rawPoints.map((point) => {
     if (!point || typeof point !== "object") return null;
     const candidate = point as Record<string, unknown>;
@@ -55,10 +96,16 @@ function GeneratedVisual({ config }: { config?: Record<string, unknown> }) {
   const rangeY = maxY - minY || 1;
   const polyline = points.map((point) => `${24 + ((point.x - minX) / rangeX) * 452},${142 - ((point.y - minY) / rangeY) * 112}`).join(" ");
   const title = typeof source.title === "string" ? source.title : typeof source.kind === "string" ? source.kind : "Generated visualization";
+  const diagram = nodes.length > 0 && rawEdges.length > 0;
+  const activeNode = nodes[focusIndex] || nodes[0];
+  const activeNodeLabel = activeNode?.label || title;
+  const activeNodeDescription = activeNode?.description || "Follow this element before moving to the next connected step.";
+  const markerId = `study-arrow-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 24) || "visual"}`;
+  useEffect(() => { setFocusIndex(0); }, [config]);
 
   return <div className="study-generated-visual" aria-label={title}>
     <div className="study-board-head"><div><span className="study-board-label">{typeof source.dimension === "string" ? source.dimension : "GENERATED VISUAL"}</span><strong>{title}</strong></div><span className="study-status">model manifest</span></div>
-    {points.length >= 2 ? <svg viewBox="0 0 500 170" className="study-signal-svg" role="img" aria-label={title}><line x1="24" y1="142" x2="476" y2="142" className="study-axis" /><line x1="24" y1="30" x2="24" y2="142" className="study-axis" /><polyline points={polyline} className="study-sampled-line" />{points.map((point, index) => <circle key={`${point.x}-${point.y}-${index}`} cx={24 + ((point.x - minX) / rangeX) * 452} cy={142 - ((point.y - minY) / rangeY) * 112} r="3" className="study-sample-point" />)}</svg> : rawNodes.length ? <div className="study-diagram-flow">{rawNodes.map((node, index) => { const item = node && typeof node === "object" ? node as Record<string, unknown> : {}; return <div className="study-diagram-node" key={String(item.id || item.label || index)}><strong>{String(item.label || item.title || item.id || `Step ${index + 1}`)}</strong>{item.description ? <span>{String(item.description)}</span> : null}</div>; })}<ul>{rawEdges.map((edge, index) => <li key={index}>{typeof edge === "string" ? edge : JSON.stringify(edge)}</li>)}</ul></div> : <PayloadView payload={source} />}
+    {points.length >= 2 ? <div className="study-visual-stage"><svg viewBox="0 0 960 360" className="study-signal-svg" role="img" aria-label={title}><line x1="72" y1="300" x2="900" y2="300" className="study-axis" /><line x1="72" y1="44" x2="72" y2="300" className="study-axis" /><polyline points={points.map((point) => `${72 + ((point.x - minX) / rangeX) * 828},${300 - ((point.y - minY) / rangeY) * 230}`).join(" ")} className="study-sampled-line" />{points.map((point, index) => <circle key={`${point.x}-${point.y}-${index}`} cx={72 + ((point.x - minX) / rangeX) * 828} cy={300 - ((point.y - minY) / rangeY) * 230} r={index === focusIndex ? "9" : "6"} className={index === focusIndex ? "study-sample-point active" : "study-sample-point"} onClick={() => setFocusIndex(index)} />)}</svg><div className="study-visual-focus"><span>TEACHING FOCUS {Math.min(focusIndex + 1, points.length)} / {points.length}</span><strong>Read the highlighted point, then compare it with the next change in the signal.</strong></div></div> : diagram ? <div className="study-visual-stage"><svg viewBox={`0 0 ${canvasWidth} ${canvasHeight}`} className="study-diagram-svg study-diagram-svg-large" role="img" aria-label={title}><defs><marker id={markerId} markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto"><path d="M0,0 L12,6 L0,12 z" className="study-diagram-arrow" /></marker></defs>{rawEdges.map((edge, index) => { const item = edge && typeof edge === "object" ? edge as Record<string, unknown> : {}; const fromIndex = nodes.findIndex((node) => node.id === String(item.from)); const toIndex = nodes.findIndex((node) => node.id === String(item.to)); const from = nodes[fromIndex]; const to = nodes[toIndex]; if (!from || !to) return null; const fromPoint = diagramPosition(from); const toPoint = diagramPosition(to); const activeEdge = fromIndex === focusIndex || toIndex === focusIndex; return <line key={`edge-${index}`} x1={fromPoint.x} y1={fromPoint.y} x2={toPoint.x} y2={toPoint.y} className={activeEdge ? "study-diagram-edge active" : "study-diagram-edge"} markerEnd={`url(#${markerId})`} />; })}{nodes.map((node, index) => { const point = diagramPosition(node); const lines = wrapLabel(node.label); const active = index === focusIndex; return <g key={node.id} className={active ? "study-diagram-node-svg active" : "study-diagram-node-svg"} onClick={() => setFocusIndex(index)} role="button" tabIndex={0} aria-label={`Teach ${node.label}`}><rect x={point.x - nodeWidth / 2} y={point.y - nodeHeight / 2} width={nodeWidth} height={nodeHeight} rx="12" className="study-diagram-box" />{lines.map((line, lineIndex) => <text key={line} x={point.x} y={point.y - 13 + lineIndex * 19} textAnchor="middle" className="study-diagram-label">{line}</text>)}{node.description && <text x={point.x} y={point.y + 32} textAnchor="middle" className="study-diagram-description">{node.description.slice(0, 32)}{node.description.length > 32 ? "…" : ""}</text>}</g>; })}</svg><div className="study-visual-focus"><span>TEACHING FOCUS {Math.min(focusIndex + 1, nodes.length)} / {nodes.length}</span><strong>{activeNodeLabel}</strong><p>{activeNodeDescription}</p></div><div className="study-visual-controls" aria-label="Visual teaching controls"><button type="button" className="study-outline-button" onClick={() => setFocusIndex((current) => Math.max(0, current - 1))} disabled={focusIndex === 0}>Previous element</button><button type="button" className="study-solid-button" onClick={() => setFocusIndex((current) => Math.min(nodes.length - 1, current + 1))} disabled={focusIndex >= nodes.length - 1}>Teach next element</button></div></div> : nodes.length ? <div className="study-diagram-flow">{nodes.map((node, index) => <button type="button" className={index === focusIndex ? "study-diagram-node active" : "study-diagram-node"} key={node.id} onClick={() => setFocusIndex(index)}><strong>{node.label}</strong>{node.description ? <span>{node.description}</span> : null}</button>)}</div> : <PayloadView payload={source} />}
   </div>;
 }
 
@@ -140,6 +187,7 @@ export default function StudyWorkspace() {
   const [interactionResults, setInteractionResults] = useState<Record<string, StudyInteractionResponse>>({});
   const [retryStages, setRetryStages] = useState<Record<string, StudyStage>>({});
   const [reviewAccepted, setReviewAccepted] = useState<Record<string, boolean>>({});
+  const [remediationVideos, setRemediationVideos] = useState<Record<string, VideoUiState>>({});
   const [loadingInteractions, setLoadingInteractions] = useState<Record<string, boolean>>({});
   const [visualizationOpen, setVisualizationOpen] = useState<Record<string, boolean>>({});
   const [chatMessages, setChatMessages] = useState<ChatUiMessage[]>([]);
@@ -204,6 +252,11 @@ export default function StudyWorkspace() {
       return next;
     });
     setReviewAccepted((current) => {
+      const next = { ...current };
+      delete next[stageId];
+      return next;
+    });
+    setRemediationVideos((current) => {
       const next = { ...current };
       delete next[stageId];
       return next;
@@ -296,6 +349,25 @@ export default function StudyWorkspace() {
       setError(caught instanceof Error ? caught.message : "The live checkpoint could not be evaluated.");
     } finally {
       setLoadingInteractions((current) => ({ ...current, [stage.stageId]: false }));
+    }
+  }
+
+  async function startRemediationVideo(scene: StudyScene, stage: StudyStage, result: StudyInteractionResponse) {
+    if (!draft?.plan?.sourceIds?.length || !result.mistake || !result.correctAnswer || !result.correction) return;
+    setRemediationVideos((current) => ({ ...current, [stage.stageId]: { status: "loading" } }));
+    try {
+      const videoResponse = await generateRemediationVideo({
+        sourceIds: draft.plan.sourceIds,
+        requestedDurationSeconds: draft?.remediationVideoDurationSeconds || 60,
+        mistake: result.mistake,
+        correctAnswer: result.correctAnswer,
+        correction: result.correction,
+        remediation: result.remediation,
+        scene: { sceneId: scene.sceneId, title: scene.title, stageKind: stage.kind, sourceAnchorIds: stage.sourceAnchorIds },
+      });
+      setRemediationVideos((current) => ({ ...current, [stage.stageId]: { status: "ready", video: videoResponse.remediationVideo } }));
+    } catch (caught) {
+      setRemediationVideos((current) => ({ ...current, [stage.stageId]: { status: "error", error: caught instanceof Error ? caught.message : "The remediation video could not be generated." } }));
     }
   }
 
@@ -419,7 +491,7 @@ export default function StudyWorkspace() {
             {activeStage.options?.length ? <div className="study-predictions" role="radiogroup" aria-label={activeStage.prompt}>{activeStage.options.map((option) => <label key={option} className={responses[activeStage.stageId] === option ? "selected" : ""}><input type="radio" name={`response-${activeStage.stageId}`} value={option} checked={responses[activeStage.stageId] === option} onChange={() => setResponses((current) => ({ ...current, [activeStage.stageId]: option }))} />{option}</label>)}</div> : <textarea className="study-interaction-textarea" value={responses[activeStage.stageId] ?? ""} onChange={(event) => setResponses((current) => ({ ...current, [activeStage.stageId]: event.target.value }))} placeholder={activeStage.kind === "numerical" ? "Write the known values, formula, substitution, and final answer." : activeStage.kind === "formula" ? "Write the formula and define each symbol." : "Write your answer before asking the live provider to inspect it."} aria-label={activeStage.prompt} maxLength={12000} />}
             {(activeStage.responseType === "file" || ["diagram", "formula", "numerical"].includes(activeStage.kind)) && <div className="study-answer-upload"><label htmlFor={`answer-file-${activeStage.stageId}`}>Upload a handwritten formula, solution, or block diagram <small>(PNG, JPG, WebP, or PDF; max 4 MB)</small></label><input id={`answer-file-${activeStage.stageId}`} type="file" accept="image/png,image/jpeg,image/webp,application/pdf" onChange={(event) => void handleAttachment(activeStage, event.target.files?.[0])} />{attachments[activeStage.stageId] && <small>Attached: {attachments[activeStage.stageId].name}</small>}</div>}
             <div className="study-confidence-row"><label htmlFor={`confidence-${activeStage.stageId}`}>How confident are you?</label><select id={`confidence-${activeStage.stageId}`} value={confidence[activeStage.stageId] ?? 3} onChange={(event) => setConfidence((current) => ({ ...current, [activeStage.stageId]: Number(event.target.value) }))}><option value={1}>1 — guessing</option><option value={2}>2 — unsure</option><option value={3}>3 — somewhat sure</option><option value={4}>4 — confident</option><option value={5}>5 — very confident</option></select></div>
-            <div className="study-checkpoint-footer"><button className="study-solid-button" type="button" onClick={() => submitInteraction(activeScene)} disabled={(!responses[activeStage.stageId]?.trim() && !attachments[activeStage.stageId]) || loadingInteractions[activeStage.stageId]}>{loadingInteractions[activeStage.stageId] ? "Evaluating..." : "Check my understanding"}</button>{interactionResults[activeStage.stageId] && <InteractionResult result={interactionResults[activeStage.stageId]} canContinue={currentStageIndex < activeStages.length - 1} onSimilarRetry={() => startSimilarRetry(activeStage, interactionResults[activeStage.stageId])} onRetry={() => retryStage(activeStage.stageId)} onContinue={() => continueAfterReview(activeScene, activeStage)} />}</div>
+            <div className="study-checkpoint-footer"><button className="study-solid-button" type="button" onClick={() => submitInteraction(activeScene)} disabled={(!responses[activeStage.stageId]?.trim() && !attachments[activeStage.stageId]) || loadingInteractions[activeStage.stageId]}>{loadingInteractions[activeStage.stageId] ? "Evaluating..." : "Check my understanding"}</button>{interactionResults[activeStage.stageId] && <InteractionResult result={interactionResults[activeStage.stageId]} canContinue={currentStageIndex < activeStages.length - 1} videoConfig={draft?.remediationVideoConfig} videoState={remediationVideos[activeStage.stageId]} onGenerateVideo={() => void startRemediationVideo(activeScene, activeStage, interactionResults[activeStage.stageId])} onSimilarRetry={() => startSimilarRetry(activeStage, interactionResults[activeStage.stageId])} onRetry={() => retryStage(activeStage.stageId)} onContinue={() => continueAfterReview(activeScene, activeStage)} />}</div>
           </section>}
           {activeStage?.kind === "definition" && <section className="study-checkpoint study-definition-step"><div className="study-checkpoint-heading"><div><span className="study-board-label">TOPIC DEFINITION</span><h3>Read the explanation, then start the first check.</h3><p className="study-stage-help">Writing and upload controls appear in the application stage. This step establishes the idea before the MCQ.</p></div><span className="study-question-label">understanding ladder</span></div><button className="study-solid-button" type="button" onClick={() => startNextStage(activeScene, currentStageIndex + 1)}>I understand — start the MCQ</button></section>}
         </>}
@@ -452,7 +524,110 @@ export default function StudyWorkspace() {
   </main>;
 }
 
-function InteractionResult({ result, canContinue, onSimilarRetry, onRetry, onContinue }: { result: StudyInteractionResponse; canContinue: boolean; onSimilarRetry: () => void; onRetry: () => void; onContinue: () => void }) {
+function RemediationVideoPlayer({ video }: { video: StudyRemediationVideo }) {
+  if (video.mode === "fireworks_slides") return <FireworksSlidePlayer video={video} />;
+  return <RemediationClipPlayer video={video} />;
+}
+
+function RemediationClipPlayer({ video }: { video: Extract<StudyRemediationVideo, { mode: "sequenced_clips" }> }) {
+  const [clipIndex, setClipIndex] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  useEffect(() => { setClipIndex(0); setPlaying(false); }, [video]);
+  const clip = video.clips[clipIndex];
+  useEffect(() => {
+    if (!playing || !clip || !videoRef.current) return;
+    void videoRef.current.play().catch(() => setPlaying(false));
+  }, [clip?.url, playing]);
+  if (!clip) return null;
+  function playNarration() {
+    setPlaying(true);
+    if (audioRef.current) {
+      audioRef.current.currentTime = videoRef.current?.currentTime || 0;
+      void audioRef.current.play().catch(() => undefined);
+    }
+  }
+  function pauseNarration() {
+    audioRef.current?.pause();
+  }
+  function syncNarration() {
+    if (audioRef.current && videoRef.current) audioRef.current.currentTime = videoRef.current.currentTime;
+  }
+  function nextClip() {
+    audioRef.current?.pause();
+    if (clipIndex >= video.clips.length - 1) {
+      setPlaying(false);
+      return;
+    }
+    setClipIndex((current) => Math.min(current + 1, video.clips.length - 1));
+  }
+  return <div className="study-remediation-player"><video ref={videoRef} key={clip.url} controls playsInline preload="metadata" poster={clip.poster} src={clip.url} onPlay={playNarration} onPause={pauseNarration} onSeeking={syncNarration} onEnded={nextClip} />{clip.narration && <><audio ref={audioRef} key={clip.narration.dataUrl} controls preload="metadata" src={clip.narration.dataUrl} /><small className="study-narration-note">Narration generated with the configured VoxCPM Python voice.</small></>}<nav className="study-video-segments" aria-label="Remediation video segments">{video.clips.map((item, index) => <button key={item.index} type="button" className={index === clipIndex ? "active" : ""} onClick={() => { audioRef.current?.pause(); setClipIndex(index); }}>{index === clipIndex && playing ? "Playing · " : ""}<span>{String(index + 1).padStart(2, "0")}</span>{item.title}</button>)}</nav><div className="study-video-progress"><span>{video.title}</span><small>{video.providerId} · segment {clipIndex + 1} of {video.clips.length} · about {Math.round(video.actualDurationSeconds)} seconds total · {clip.width}×{clip.height}</small></div></div>;
+}
+
+function FireworksSlidePlayer({ video }: { video: Extract<StudyRemediationVideo, { mode: "fireworks_slides" }> }) {
+  const [slideIndex, setSlideIndex] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [browserVoiceAvailable, setBrowserVoiceAvailable] = useState(false);
+  const [voiceMode, setVoiceMode] = useState<"server" | "browser" | "unavailable">(video.voiceProviderId ? "server" : "unavailable");
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const slide = video.slides[slideIndex];
+  useEffect(() => {
+    setSlideIndex(0);
+    setPlaying(false);
+    setVoiceMode(video.voiceProviderId ? "server" : "unavailable");
+  }, [video, video.voiceProviderId]);
+  useEffect(() => {
+    setBrowserVoiceAvailable(typeof window !== "undefined" && "speechSynthesis" in window && "SpeechSynthesisUtterance" in window);
+  }, []);
+  useEffect(() => {
+    if (!playing || !slide) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      if (slideIndex >= video.slides.length - 1) setPlaying(false);
+      else setSlideIndex((current) => Math.min(current + 1, video.slides.length - 1));
+    }, Math.max(4, slide.durationSeconds) * 1000);
+    const speakInBrowser = () => {
+      if (!("speechSynthesis" in window) || !("SpeechSynthesisUtterance" in window)) {
+        setVoiceMode("unavailable");
+        return;
+      }
+      const utterance = new SpeechSynthesisUtterance(slide.narration || `${slide.title}. ${slide.body}`);
+      utterance.rate = 0.9;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+      const voices = window.speechSynthesis.getVoices();
+      utterance.voice = voices.find((voice) => /^en(-|_)/i.test(voice.lang)) || voices[0] || null;
+      utterance.onerror = () => setVoiceMode("unavailable");
+      setVoiceMode("browser");
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utterance);
+    };
+    if (slide.audio?.dataUrl && audioRef.current) {
+      setVoiceMode("server");
+      audioRef.current.currentTime = 0;
+      void audioRef.current.play().catch(() => speakInBrowser());
+    } else {
+      speakInBrowser();
+    }
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      window.speechSynthesis?.cancel();
+      audioRef.current?.pause();
+    };
+  }, [playing, slide, slideIndex, video.slides.length]);
+  if (!slide) return null;
+  const diagramConfig = slide.diagram && slide.diagram.nodes.length ? { title: slide.title, kind: "diagram", ...slide.diagram } : undefined;
+  const voiceLabel = voiceMode === "server" ? "VoxCPM voice enabled" : voiceMode === "browser" ? "browser narration" : "voice unavailable";
+  const voiceNote = voiceMode === "server" ? "Narration generated with the configured VoxCPM Python voice." : voiceMode === "browser" ? "Narration is being read by your browser while the lesson advances automatically." : browserVoiceAvailable ? "Click Play lesson to start browser narration, or configure TTS_VOXCPM_BASE_URL for generated voice." : "No voice service is configured. Configure TTS_VOXCPM_BASE_URL on the backend for generated narration.";
+  return <div className="study-slide-player"><div className="study-slide-canvas"><span className="study-slide-counter">SLIDE {slideIndex + 1} / {video.slides.length}</span><h4>{slide.title}</h4><p>{slide.body}</p><ul>{slide.bullets.map((bullet) => <li key={bullet}>{bullet}</li>)}</ul>{diagramConfig && <GeneratedVisual config={diagramConfig} />}</div>{slide.audio?.dataUrl && <audio ref={audioRef} key={slide.audio.dataUrl} controls preload="metadata" src={slide.audio.dataUrl} />}<small className={`study-narration-note ${voiceMode === "unavailable" ? "study-narration-unavailable" : ""}`}>{voiceNote}</small><div className="study-slide-controls"><button className="study-outline-button" type="button" onClick={() => { setPlaying(false); setSlideIndex((current) => Math.max(0, current - 1)); }}>Previous</button><button className="study-solid-button" type="button" onClick={() => setPlaying((current) => !current)}>{playing ? "Pause lesson" : "Play narrated lesson"}</button><button className="study-outline-button" type="button" onClick={() => { setPlaying(false); setSlideIndex((current) => Math.min(video.slides.length - 1, current + 1)); }}>Next</button></div><div className="study-video-progress"><span>{video.title}</span><small>{video.providerId} · {voiceLabel} · slide {slideIndex + 1} of {video.slides.length} · about {Math.round(video.actualDurationSeconds)} seconds total</small></div></div>;
+}
+
+function InteractionResult({ result, canContinue, videoConfig, videoState, onGenerateVideo, onSimilarRetry, onRetry, onContinue }: { result: StudyInteractionResponse; canContinue: boolean; videoConfig?: StudyDraft["remediationVideoConfig"]; videoState?: VideoUiState; onGenerateVideo: () => void; onSimilarRetry: () => void; onRetry: () => void; onContinue: () => void }) {
   const message = result.feedback || result.answer || result.explanation || result.reasonCode || result.state || "The provider returned a result.";
-  return <div className={`study-interaction-result ${result.correct === false ? "needs-review" : "passed"}`} role="status"><strong>{result.correct ? "Understanding confirmed" : result.correct === false ? "Review this idea before moving on" : result.state || "complete"}</strong><p>{message}</p>{result.correct === false && result.mistake && <p className="study-mistake"><strong>Where it went wrong:</strong> {result.mistake}</p>}{result.correct === false && result.correctAnswer && <p className="study-correction"><strong>Correct answer:</strong> {result.correctAnswer}</p>}{result.correct === false && result.correction && <p><strong>How to fix it:</strong> {result.correction}</p>}{result.remediation && <p><strong>Review next:</strong> {result.remediation}</p>}{typeof result.understandingScore === "number" && <span>Understanding: {result.understandingScore}%</span>}{result.overconfidence && <span className="study-overconfidence">Confidence was higher than the demonstrated understanding. Slow down and use the remediation below.</span>}{result.correct === false && <div className="study-result-actions">{result.retryPrompt && <button className="study-solid-button" type="button" onClick={onSimilarRetry}>Try a similar question</button>}{canContinue && <button className="study-outline-button" type="button" onClick={onContinue}>Review answer and continue</button>}<button className="study-outline-button study-retry-button" type="button" onClick={onRetry}>{result.retryPrompt ? "Retry this question" : "Try this stage again"}</button></div>}<small>{result.providerMode} / record v{result.recordVersion} / {result.sourceAnchorIds.length} anchors</small></div>;
+  const videoLabel = videoConfig?.label || "Source-grounded remediation video";
+  const videoDescription = videoConfig?.mode === "sequenced_clips" ? "OpenMAIC-style rendered clips are generated in short ordered segments, then presented as one correction lesson." : "Fireworks Qwen creates a source-grounded slide lesson; the configured local Python voice reads it aloud when available.";
+  return <div className={`study-interaction-result ${result.correct === false ? "needs-review" : "passed"}`} role="status"><strong>{result.correct ? "Understanding confirmed" : result.correct === false ? "Review this idea before moving on" : result.state || "complete"}</strong><p>{message}</p>{result.correct === false && result.mistake && <p className="study-mistake"><strong>Where it went wrong:</strong> {result.mistake}</p>}{result.correct === false && result.correctAnswer && <p className="study-correction"><strong>Correct answer:</strong> {result.correctAnswer}</p>}{result.correct === false && result.correction && <p><strong>How to fix it:</strong> {result.correction}</p>}{result.remediation && <p><strong>Review next:</strong> {result.remediation}</p>}{typeof result.understandingScore === "number" && <span>Understanding: {result.understandingScore}%</span>}{result.overconfidence && <span className="study-overconfidence">Confidence was higher than the demonstrated understanding. Slow down and use the remediation below.</span>}{result.correct === false && <><div className="study-remediation-options"><article><strong>1 · Read the correction</strong><p>Use the definition, source-grounded explanation, and diagram above to repair the exact idea before retrying.</p></article><article className="study-video-section"><div className="study-video-section-head"><strong>2 · {videoLabel}</strong><span>{videoConfig?.configured === false ? "not configured" : videoConfig?.voiceConfigured ? "voice enabled" : "voice optional"}</span></div><p>{videoDescription}</p>{videoState?.status === "loading" && <div className="study-video-loading" role="status"><span className="study-build-spinner" />Preparing source-grounded segments, narration, and playback controls...</div>}{videoState?.status === "ready" && videoState.video ? <RemediationVideoPlayer video={videoState.video} /> : videoState?.status !== "loading" && <button className="study-outline-button" type="button" onClick={onGenerateVideo}>{videoConfig?.mode === "sequenced_clips" ? "Generate rendered video lesson" : "Generate guided slide lesson"}</button>}{videoState?.status === "error" && <small className="study-video-error">{videoState.error}</small>}</article></div><div className="study-result-actions">{result.retryPrompt && <button className="study-solid-button" type="button" onClick={onSimilarRetry}>Try a similar question</button>}{canContinue && <button className="study-outline-button" type="button" onClick={onContinue}>Review answer and continue</button>}<button className="study-outline-button study-retry-button" type="button" onClick={onRetry}>{result.retryPrompt ? "Retry this question" : "Try this stage again"}</button></div></>}<small>{result.providerMode} / record v{result.recordVersion} / {result.sourceAnchorIds.length} anchors</small></div>;
 }

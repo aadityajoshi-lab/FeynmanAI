@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from django.test import override_settings
 from rest_framework.test import APIClient
 
 
@@ -338,6 +339,51 @@ def test_generated_scene_rejects_unapproved_anchor(client):
     )
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "source_boundary_violation"
+
+
+def test_remediation_slides_rebind_model_anchors_to_topic_anchors():
+    from teachback.remediation_video_views import _complete_slide_lesson, _validate_slide_manifest
+
+    slides = _validate_slide_manifest(
+        {
+            "slides": [
+                {
+                    "title": "Definition",
+                    "body": "A source-grounded explanation.",
+                    "narration": "Read the definition before applying the idea.",
+                    "bullets": ["Use the approved topic evidence."],
+                    "sourceAnchorIds": ["model-invented-anchor"],
+                    "diagram": {"nodes": [], "edges": []},
+                }
+            ] * 4,
+        },
+        {"topic-anchor", "other-approved-anchor"},
+        ["topic-anchor"],
+    )
+
+    assert all(slide["sourceAnchorIds"] == ["topic-anchor"] for slide in slides)
+    completed = _complete_slide_lesson(
+        slides,
+        topic_title="Digital instrumentation",
+        correct_answer="The ADC comes before the display.",
+        correction="Follow the signal path.",
+        remediation="Review the block order.",
+        scene_anchors=["topic-anchor"],
+    )
+    assert len(completed) == 4
+    assert all(slide["sourceAnchorIds"] == ["topic-anchor"] for slide in completed)
+
+
+@pytest.mark.django_db
+@override_settings(VIDEO_SERVICE_KEY="", REMEDIATION_VIDEO_PROVIDER="seedance")
+def test_remediation_video_stays_optional_when_video_service_is_not_configured(client):
+    response = client.post(
+        "/api/v1/study-plans/remediation-video",
+        {"sourceIds": ["dsap-sampling-v1"], "scene": {"sourceAnchorIds": ["dsap-sampling-v1-span-01"]}},
+        format="json",
+    )
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "video_provider_unavailable"
 
 
 @pytest.mark.django_db

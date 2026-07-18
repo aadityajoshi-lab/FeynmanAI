@@ -1,34 +1,70 @@
 # OpenMAIC integration boundary
 
-OpenMAIC is a useful reference implementation for interactive learning, not a drop-in replacement for Feynman. The repository was audited at commit `34448beb6ce764ec2bc8ceb1d6ed519c37fa6184` (2026-07-17). Its current main branch is MIT-licensed, but the repository contains separately packaged artifacts with their own package metadata; any future copied file must retain its notice and be rechecked at the pinned commit.
+OpenMAIC is the reference implementation for the remediation media pipeline.
+Feynman uses the audited commit `34448beb6ce764ec2bc8ceb1d6ed519c37fa6184`
+(MIT License) and keeps Django as the source/evidence policy authority.
 
 Reference: [THU-MAIC/OpenMAIC](https://github.com/THU-MAIC/OpenMAIC).
 
-## What we are carrying forward
+## What is carried forward
 
 | OpenMAIC element | Feynman adaptation | Boundary |
 |---|---|---|
-| Two-stage outline -> scene generation | Upload material -> editable `StudyPlan` -> approved scene manifest | GPT proposes typed JSON; the server validates it before publication. |
-| SVG whiteboard with pan/zoom, reset/fit, reveal, and history | `WhiteboardManifest` and a small Feynman whiteboard surface | No OpenMAIC stage store or arbitrary action execution is imported. |
-| Interactive HTML scene renderer | Optional reviewed 2D/3D scene configuration, opened by the module copilot | No model-generated HTML/JS is executed in the learner page; a visualization is never a build requirement. |
-| Deep Interactive 3D/simulation scenes | Optional reviewed `three_d` scene manifest | 3D is not required for the DSAP MVP; sandboxing and a review gate are mandatory. |
-| Quiz and question scene types | Approved past-question bank with source/concept IDs | Runtime samples approved questions; it does not generate unlimited exam content on click. |
-| AI teacher drawing and spotlight actions | Finite actions: `reveal`, `spotlight`, `draw`, `write`, `equation` | Each action is bounded by count, size, and scene version. |
-| PDF/media authoring pipeline | Private source upload -> extraction candidates -> review -> immutable source pack | Raw uploads never become runtime evidence automatically. |
+| Typed media provider registry | Server-selected remediation mode and safe capability status | Provider credentials never reach the browser. |
+| Provider capability normalization | Rendered path normalizes duration, aspect ratio, and resolution | Unsupported options fall back to provider-supported values. |
+| Async task pipeline | Submit, poll, timeout, and ordered clip metadata | Two rendered clips are generated concurrently at most. |
+| Media generation section | Intake capability card and incorrect-answer video section | Video is optional and never blocks learning progress. |
+| VoxCPM Python narration contract | Optional `/tts/upload` narration for slides or clips | Voice remains server-side and can be unavailable. |
+| Source-bounded lesson generation | Django resolves approved source anchors before media generation | Video is a teaching aid, never authoritative evidence. |
 
-## What we are not importing
+## Remediation video flow
 
-- OpenMAIC's full Next.js/LangGraph/provider stack; Django remains the source and policy authority.
-- Multi-agent classroom theatre, TTS/ASR, OpenClaw, PBL, export, or hosted retrieval in the first study slice.
-- Arbitrary generated HTML, scripts, iframes, or network-enabled visualizations.
-- An unbounded generic chat surface. Feynman's copilot is contextual, source-bounded, and limited to typed module controls; it complements the concept objective, checkpoint, and teach-back.
+An incorrect checkpoint exposes two independent recovery paths: an immediate
+text/visual correction and an optional guided video. Feynman calls
+`POST /api/v1/study-plans/remediation-video`; Django validates the stage anchors
+and then selects one of two modes:
 
-## Required provenance for copied code
+- `fireworks-slides` (default): Fireworks Qwen returns a typed 4-8 slide
+  storyboard. Feynman presents it with optional VoxCPM narration or browser
+  speech fallback. This uses the existing Fireworks key only and is the normal
+  local setup.
+- rendered clips: the protected local Next route follows OpenMAIC's provider
+  pipeline with short 5/10-second tasks, two-at-a-time generation, polling,
+  ordered segment playback, dimensions, and optional narration.
 
-If an isolated MIT-licensed file is copied rather than reimplemented, preserve the original copyright/license notice and add a nearby `NOTICE` comment containing:
+The learner can choose a 1, 2, 3, or 5 minute target in the Video remediation
+section. The app generates media only after an incorrect answer and keeps the
+retry, similar-question, and continue controls available if media fails.
+
+## Settings
+
+```text
+# backend/.env -- default Fireworks-only remediation
+REMEDIATION_VIDEO_PROVIDER=fireworks-slides
+TTS_VOXCPM_BASE_URL=http://127.0.0.1:8001
+
+# backend/.env -- optional protected bridge for rendered clips
+VIDEO_SERVICE_BASE_URL=http://127.0.0.1:3000
+VIDEO_SERVICE_KEY=feynman-local-video
+VIDEO_SERVICE_TIMEOUT_SECONDS=900
+
+# frontend/.env.local -- server-only, required only for rendered clips
+VIDEO_PROVIDER=seedance
+VIDEO_SEEDANCE_API_KEY=your-server-side-provider-key
+VIDEO_SEEDANCE_MODEL=doubao-seedance-2-0-260128
+FEYNMAN_VIDEO_INTERNAL_KEY=feynman-local-video
+```
+
+The backend Fireworks key is used for Qwen authoring, evaluation, and the
+default slide lesson. It is never exposed to the browser and is not treated as
+a Seedance key.
+
+## What is not imported
+
+Feynman does not copy OpenMAIC's full classroom, settings store, arbitrary HTML
+renderer, or unrelated providers. Any future isolated MIT-licensed copied file
+must retain the notice:
 
 ```text
 Adapted from THU-MAIC/OpenMAIC, commit 34448beb6ce764ec2bc8ceb1d6ed519c37fa6184, MIT License.
 ```
-
-The first implementation uses the interaction ideas and typed manifest boundary rather than copying the repository wholesale. This keeps the learner surface minimalist and avoids pulling in incompatible stores, renderers, or nested package terms.

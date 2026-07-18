@@ -1,32 +1,43 @@
-# Deferred video and media pipeline
+# Remediation video and media pipeline
 
-Video is deliberately outside the MVP runtime. The future pipeline must not
-allow an unreviewed transcript or model-generated quote to become evidence.
-
-```text
-licensed URL or file
-  → MIME, size, license, and SHA-256 validation
-  → audio extraction
-  → timestamped transcription
-  → deterministic transcript segmentation
-  → instructor approves six-to-eight evidence spans
-  → immutable SourcePack version
-  → published lesson asset
-```
-
-Media states:
+The study runtime supports an optional remediation lesson after an incorrect
+checkpoint. It is deliberately separate from the evidence record: generated
+media teaches the learner but is not a source citation.
 
 ```text
-pending_upload → validating → rejected | extracting → transcribing
-→ segmented → awaiting_approval → approved → published
+incorrect checkpoint
+  -> immediate text correction + source-grounded visual
+  -> learner chooses guided video
+  -> Django validates source IDs and bounded correction fields
+  -> Fireworks slide generator OR protected rendered-video adapter
+  -> ordered 1-5 minute lesson with segment controls
 ```
 
-Required metadata includes license/authorization, original URL or file name,
-MIME type, byte size, checksum, transcript engine/version, transcript
-checksum, segment timestamps, approver, approval timestamp, and source-pack
-version. A future timestamp UI may link to a segment, but the model must return
-approved span IDs only.
+## Fireworks slide mode
 
-Do not add uploads, arbitrary URL ingestion, ASR, vision analysis, embeddings,
-RAG, or background workers until the source-bounded Evidence Record loop has
-passed its submission gates.
+The default `REMEDIATION_VIDEO_PROVIDER=fireworks-slides` asks the existing
+Fireworks Qwen provider for a typed storyboard containing definition, visual
+model, application, misconception repair, and transfer content. The player
+shows one slide at a time and includes a diagram when the model returned one.
+VoxCPM narration is optional; browser speech is used as a fallback. This mode
+does not claim that Qwen generated an MP4.
+
+## OpenMAIC-style rendered mode
+
+When configured, the rendered path follows OpenMAIC's actual design:
+
+1. Normalize the requested lesson against provider capabilities.
+2. Split 60-300 seconds into bounded short segments.
+3. Submit asynchronous provider tasks.
+4. Poll each task with a five-minute timeout.
+5. Generate at most two segments concurrently.
+6. Return ordered clips with duration and dimensions.
+7. Play clips as one lesson, with an explicit segment list and optional synced
+   VoxCPM narration.
+
+The route currently ports the Seedance adapter used by OpenMAIC. Additional
+providers can be added behind the same registry without changing the Feynman
+endpoint or learner UI.
+
+Provider credentials stay in server environments. Generated URLs are teaching
+outputs only and never enter the approved source pack.

@@ -41,6 +41,8 @@ Open `http://localhost:3000/study/new` for the current flow. Name a subject, upl
 
 The study desk includes a source-bounded module copilot at `POST /api/v1/study-plans/chat`. It can answer a question from server-owned source spans and return only typed controls such as next/previous scene, focus checkpoint, repeat explanation, change learning mode, or show an available visualization. It cannot execute browser code, accept source text, or create evidence quotes.
 
+After an incorrect checkpoint, the desk keeps the text/diagram correction available immediately and offers an optional guided video. The relevant OpenMAIC video-generation slice is embedded in the Feynman frontend; configure `frontend/.env.local` with `VIDEO_PROVIDER=seedance` and `VIDEO_SEEDANCE_API_KEY`. The learner browser never receives the provider key. The app generates a 1–5 minute sequenced clip lesson from approved source context.
+
 Uploads are sent to `POST /api/v1/study-sources/ingest`. PDF text is returned as page-located candidate spans; non-PDF media is retained with an explicit extraction/review state until its authoring pipeline is implemented. Every upload remains `awaiting_approval`, `autoApproved: false`, and `publishable: false`. `POST /api/v1/study-plans` asks the selected live provider for a typed module and rejects partial, malformed, or unapproved output.
 
 The DSAP source pack is intentionally marked `instructor_review_required` in `contracts/v2/source-pack.json`. Until an instructor changes that approval state to `approved`, explanation checkpoints fail closed with `source_pack_not_approved`; this keeps unreviewed text from becoming evidence.

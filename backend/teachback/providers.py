@@ -1440,6 +1440,54 @@ class FireworksProvider(LLMProvider):
         return result
 
 
+    def generate_remediation_slides(self, request: dict) -> dict:
+        """Create a source-grounded slide storyboard with the Qwen Fireworks key."""
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["title", "slides"],
+            "properties": {
+                "title": {"type": "string", "minLength": 8, "maxLength": 240},
+                "slides": {
+                    "type": "array", "minItems": 4, "maxItems": 8,
+                    "items": {
+                        "type": "object", "additionalProperties": False,
+                        "required": ["slideId", "title", "body", "bullets", "narration", "sourceAnchorIds", "diagram"],
+                        "properties": {
+                            "slideId": {"type": "string", "maxLength": 80},
+                            "title": {"type": "string", "minLength": 3, "maxLength": 160},
+                            "body": {"type": "string", "minLength": 20, "maxLength": 900},
+                            "bullets": {"type": "array", "minItems": 2, "maxItems": 5, "items": {"type": "string", "maxLength": 220}},
+                            "narration": {"type": "string", "minLength": 40, "maxLength": 1400},
+                            "sourceAnchorIds": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+                            "diagram": {
+                                "type": "object", "additionalProperties": False, "required": ["nodes", "edges"],
+                                "properties": {
+                                    "nodes": {"type": "array", "maxItems": 8, "items": {"type": "object", "additionalProperties": False, "required": ["id", "label"], "properties": {"id": {"type": "string", "maxLength": 40}, "label": {"type": "string", "maxLength": 100}}}},
+                                    "edges": {"type": "array", "maxItems": 12, "items": {"type": "object", "additionalProperties": False, "required": ["from", "to"], "properties": {"from": {"type": "string", "maxLength": 40}, "to": {"type": "string", "maxLength": 40}}}},
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        }
+        instruction = (
+            "Create a complete source-grounded remediation slide lesson. This is not an MP4 request: "
+            "make 4 to 8 readable teaching slides that can be shown one at a time with narration. "
+            "Repair the learner's exact mistake, then teach the definition, visual model, worked application, correction, and transfer check. "
+            "Use only the approved source context and anchor IDs. Do not invent facts, values, citations, or answer keys. "
+            f"Topic: {request.get('topicTitle')}; stage: {request.get('stageKind')}; "
+            f"Learner mistake: {request.get('mistake')}; correct answer: {request.get('correctAnswer')}; "
+            f"Correction: {request.get('correction')}; review focus: {request.get('remediation')}; "
+            f"Approved anchor IDs (use these only if you include sourceAnchorIds): {request.get('approvedAnchorIds')}; "
+            f"Approved source context: {request.get('sourceContext')}"
+        )
+        result = self._chat_json(instruction, "remediation_slides_v1", schema)
+        result["providerMode"] = self.mode
+        return result
+
+
 def provider_for(mode: str | None = None) -> LLMProvider:
     configured = (mode or settings.LLM_PROVIDER or "fixture").lower()
     if configured in {"fireworks", "live_fireworks", "qwen"}:

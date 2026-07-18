@@ -7,6 +7,7 @@ from .dynamic_views import (
 )
 from .study_source_views import StudySourceDetailView, StudySourceIngestView
 from .study_plan_views import ProviderStatusView, StudyPlanChatView, StudyPlanInteractionView, StudyPlanView
+from .remediation_video_views import StudyRemediationVideoConfigView, StudyRemediationVideoView
 
 urlpatterns = [
     path("study-sources/ingest", StudySourceIngestView.as_view()),
@@ -18,6 +19,10 @@ urlpatterns = [
     path("study-plans/interactions/", StudyPlanInteractionView.as_view()),
     path("study-plans/chat", StudyPlanChatView.as_view()),
     path("study-plans/chat/", StudyPlanChatView.as_view()),
+    path("study-plans/remediation-video", StudyRemediationVideoView.as_view()),
+    path("study-plans/remediation-video/", StudyRemediationVideoView.as_view()),
+    path("study-plans/remediation-video/config", StudyRemediationVideoConfigView.as_view()),
+    path("study-plans/remediation-video/config/", StudyRemediationVideoConfigView.as_view()),
     path("providers", ProviderStatusView.as_view()),
     path("subjects", SubjectListView.as_view()),
     path("subjects/<slug:subject_id>", SubjectDetailView.as_view()),

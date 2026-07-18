@@ -5,7 +5,7 @@ import { ChangeEvent, DragEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { studyModes } from "@/lib/learningModes";
 import type { StudyAsset } from "@/lib/studyTypes";
-import { generateStudyPlan, getProviderStatus, ingestStudySource, ingestStudyUrl, ProviderStatus, StudySourceIngestResponse } from "@/lib/studyApi";
+import { generateStudyPlan, getProviderStatus, getRemediationVideoConfig, ingestStudySource, ingestStudyUrl, ProviderStatus, StudySourceIngestResponse, StudyRemediationVideoConfig } from "@/lib/studyApi";
 
 const acceptedTypes = new Set(["application/pdf", "image/png", "image/jpeg", "image/webp", "video/mp4", "video/webm", "video/quicktime", "audio/mpeg", "audio/wav", "audio/x-wav", "audio/ogg", "audio/webm"]);
 type LiveProvider = "fireworks" | "openai";
@@ -29,6 +29,8 @@ export default function StudyIntake() {
   const [learningMode, setLearningMode] = useState<string>(studyModes[0].id);
   const [provider, setProvider] = useState<LiveProvider>("fireworks");
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
+  const [videoConfig, setVideoConfig] = useState<StudyRemediationVideoConfig | null>(null);
+  const [videoDurationSeconds, setVideoDurationSeconds] = useState(60);
   const [assets, setAssets] = useState<StudyAsset[]>([]);
   const [files, setFiles] = useState<File[]>([]);
   const [pastQuestionAssets, setPastQuestionAssets] = useState<StudyAsset[]>([]);
@@ -49,6 +51,10 @@ export default function StudyIntake() {
       const preferred = status.providers.find((item) => item.id === "fireworks" && item.available) ?? status.providers.find((item) => item.id === "openai" && item.available);
       if (preferred && (preferred.id === "fireworks" || preferred.id === "openai")) setProvider(preferred.id);
     }).catch(() => setError("The provider status could not be loaded. Check that Django is running."));
+  }, []);
+
+  useEffect(() => {
+    getRemediationVideoConfig().then(setVideoConfig).catch(() => setVideoConfig(null));
   }, []);
 
   function addFiles(selected: FileList | File[], target: "notes" | "past_questions" = "notes") {
@@ -119,6 +125,8 @@ export default function StudyIntake() {
         assets: [...assets, ...pastQuestionAssets],
         pastQuestionSourceIds: uploadedPastQuestions.map((item) => item.sourceId),
         learningMode,
+        remediationVideoDurationSeconds: videoDurationSeconds,
+        remediationVideoConfig: videoConfig,
         plan,
         uploadReview: uploaded.map((item) => ({ sourceId: item.sourceId, filename: item.filename, approvalStatus: item.approvalStatus, extraction: item.extraction })),
       };
@@ -204,7 +212,23 @@ export default function StudyIntake() {
           </section>
 
           <section className="study-intake-block">
-            <div className="study-block-heading"><span>06</span><div><h2>How do you want to start?</h2><p>This is a learner preference, not a fixed learning-style label.</p></div></div>
+            <div className="study-block-heading"><span>06</span><div><h2>Video remediation</h2><p>When you make a mistake, Feynman can generate a source-grounded correction lesson in the configured OpenMAIC-style video pipeline.</p></div></div>
+            <div className="study-video-config-card">
+              <div><strong>{videoConfig?.label || "Checking video capability..."}</strong><small>{videoConfig?.provider || "Server-managed provider"}</small></div>
+              <em className={videoConfig?.configured ? "ready" : "pending"}>{videoConfig?.configured ? "ready" : "server setup"}</em>
+            </div>
+            <label className="study-select-label" htmlFor="remediation-video-duration">Lesson length</label>
+            <select id="remediation-video-duration" className="study-select" value={videoDurationSeconds} onChange={(event) => setVideoDurationSeconds(Number(event.target.value))}>
+              <option value={60}>1 minute · focused correction</option>
+              <option value={120}>2 minutes · explain and apply</option>
+              <option value={180}>3 minutes · full remediation</option>
+              <option value={300}>5 minutes · deep review</option>
+            </select>
+            <p className="study-mode-description">The lesson is generated only after an incorrect response, and includes short ordered segments, diagrams, narration when configured, and a transfer example.</p>
+          </section>
+
+          <section className="study-intake-block">
+            <div className="study-block-heading"><span>07</span><div><h2>How do you want to start?</h2><p>This is a learner preference, not a fixed learning-style label.</p></div></div>
             <label className="study-select-label" htmlFor="study-mode">Learning approach</label>
             <select id="study-mode" className="study-select" value={learningMode} onChange={(event) => setLearningMode(event.target.value)}>{studyModes.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select>
             <p className="study-mode-description">{mode.description}</p>
