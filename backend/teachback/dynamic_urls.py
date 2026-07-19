@@ -8,8 +8,16 @@ from .dynamic_views import (
 from .study_source_views import StudySourceDetailView, StudySourceIngestView
 from .study_plan_views import ProviderStatusView, StudyPlanChatView, StudyPlanInteractionView, StudyPlanView
 from .remediation_video_views import StudyRemediationVideoConfigView, StudyRemediationVideoView
+from .notebook_views import NotebookArtifactView, NotebookAskView, NotebookCreateView, NotebookDetailView, NotebookLessonView, NotebookSourceUploadView
 
 urlpatterns = [
+    path("notebooks", NotebookCreateView.as_view()),
+    path("notebooks/", NotebookCreateView.as_view()),
+    path("notebooks/<uuid:notebook_id>", NotebookDetailView.as_view()),
+    path("notebooks/<uuid:notebook_id>/sources", NotebookSourceUploadView.as_view()),
+    path("notebooks/<uuid:notebook_id>/artifacts", NotebookArtifactView.as_view()),
+    path("notebooks/<uuid:notebook_id>/ask", NotebookAskView.as_view()),
+    path("notebooks/<uuid:notebook_id>/lessons", NotebookLessonView.as_view()),
     path("study-sources/ingest", StudySourceIngestView.as_view()),
     path("study-sources/ingest/", StudySourceIngestView.as_view()),
     path("study-sources/<str:source_id>", StudySourceDetailView.as_view()),

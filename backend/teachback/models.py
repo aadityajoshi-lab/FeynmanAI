@@ -36,6 +36,56 @@ class StudySource(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 
+class Notebook(models.Model):
+    """A durable, source-first workspace for a learner's materials."""
+
+    notebook_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    title = models.CharField(max_length=240)
+    subject = models.CharField(max_length=240, blank=True)
+    description = models.TextField(blank=True)
+    learning_goal = models.CharField(max_length=40, default="understand")
+    status = models.CharField(max_length=32, default="draft")
+    ocr_provider = models.CharField(max_length=80, default="local_fallback")
+    knowledge_pack = models.JSONField(default=dict, blank=True)
+    knowledge_pack_markdown = models.TextField(blank=True)
+    stats = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class NotebookSource(models.Model):
+    """One source inside a notebook and the structured extraction from it."""
+
+    source_id = models.CharField(max_length=160, unique=True)
+    notebook = models.ForeignKey(Notebook, on_delete=models.CASCADE, related_name="notebook_sources")
+    title = models.CharField(max_length=240)
+    source_kind = models.CharField(max_length=40, default="reference")
+    filename = models.CharField(max_length=255, blank=True)
+    mime_type = models.CharField(max_length=120, blank=True)
+    size_bytes = models.PositiveBigIntegerField(default=0)
+    sha256 = models.CharField(max_length=64, blank=True)
+    status = models.CharField(max_length=32, default="queued")
+    extraction_method = models.CharField(max_length=80, default="local")
+    extraction = models.JSONField(default=dict, blank=True)
+    blocks = models.JSONField(default=list, blank=True)
+    assets = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class NotebookArtifact(models.Model):
+    """A reproducible learner output generated from a notebook knowledge pack."""
+
+    artifact_id = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    notebook = models.ForeignKey(Notebook, on_delete=models.CASCADE, related_name="artifacts")
+    artifact_type = models.CharField(max_length=40)
+    title = models.CharField(max_length=240)
+    status = models.CharField(max_length=32, default="ready")
+    payload = models.JSONField(default=dict, blank=True)
+    source_ids = models.JSONField(default=list, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
 class SubjectPack(models.Model):
     """Versioned, publishable subject configuration independent of a lesson."""
     subject_id = models.SlugField(max_length=100, unique=True)

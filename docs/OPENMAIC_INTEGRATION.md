@@ -17,6 +17,40 @@ Reference: [THU-MAIC/OpenMAIC](https://github.com/THU-MAIC/OpenMAIC).
 | VoxCPM Python narration contract | Optional `/tts/upload` narration for slides or clips | Voice remains server-side and can be unavailable. |
 | Source-bounded lesson generation | Django resolves approved source anchors before media generation | Video is a teaching aid, never authoritative evidence. |
 
+## Notebook OpenMAIC Study Studio
+
+Notebook workspaces now include a native OpenMAIC-style lesson path rather than
+an iframe or a second classroom application. A learner can ask a question,
+receive a notebook-grounded answer, and turn that exact question into a
+persisted narrated lesson. The lesson contains 4–8 scenes, readable slide
+content, guided reveal/highlight actions, approved source anchors, actual OCR
+assets when relevant, diagrams when needed, automatic progression, and Python
+voice narration when the local voice service is available. Browser speech is
+the fallback when it is not.
+
+The copilot searches the uploaded knowledge pack first. If no matching source
+passage exists, or the learner explicitly asks for current/external information,
+it can use a server-configured Tavily or SearXNG backend; a small DuckDuckGo
+abstract fallback keeps the UI honest when no search key is configured. Web
+results remain clearly labeled as web context and never become notebook source
+anchors.
+
+Relevant endpoints:
+
+```text
+POST /api/v1/notebooks/<notebook-id>/ask
+POST /api/v1/notebooks/<notebook-id>/lessons
+```
+
+Optional server configuration:
+
+```text
+TAVILY_API_KEY=...
+TAVILY_BASE_URL=https://api.tavily.com
+SEARXNG_BASE_URL=...
+WEB_SEARCH_TIMEOUT_SECONDS=25
+```
+
 ## Remediation video flow
 
 An incorrect checkpoint exposes two independent recovery paths: an immediate

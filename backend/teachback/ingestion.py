@@ -32,6 +32,11 @@ ALLOWED_MIME_TYPES = {
 
 _MIME_SIGNATURES = {
     "application/pdf": lambda payload: payload.startswith(b"%PDF-"),
+    "text/plain": lambda payload: True,
+    "text/markdown": lambda payload: True,
+    "text/csv": lambda payload: True,
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": lambda payload: payload.startswith(b"PK"),
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": lambda payload: payload.startswith(b"PK"),
     "image/png": lambda payload: payload.startswith(b"\x89PNG\r\n\x1a\n"),
     "image/jpeg": lambda payload: payload.startswith(b"\xff\xd8\xff"),
     "image/webp": lambda payload: len(payload) >= 12 and payload[:4] == b"RIFF" and payload[8:12] == b"WEBP",
@@ -42,6 +47,14 @@ _MIME_SIGNATURES = {
     "audio/x-wav": lambda payload: len(payload) >= 12 and payload[:4] == b"RIFF" and payload[8:12] == b"WAVE",
     "audio/ogg": lambda payload: payload.startswith(b"OggS"),
     "audio/webm": lambda payload: payload.startswith(b"\x1a\x45\xdf\xa3"),
+}
+
+NOTEBOOK_ALLOWED_MIME_TYPES = ALLOWED_MIME_TYPES | {
+    "text/plain",
+    "text/markdown",
+    "text/csv",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 }
 
 _NUMBERED_SECTION_MARKER = re.compile(r"(?<![\w.])(\d+(?:\.\d+)+)(?=\s|[.)\-:])")
@@ -118,7 +131,7 @@ def inspect_asset(path: str | Path, *, max_bytes: int = MAX_SOURCE_BYTES) -> Ass
     return AssetMetadata(str(asset), mime, size, digest)
 
 
-def inspect_uploaded_asset(uploaded_file, *, max_bytes: int = MAX_SOURCE_BYTES) -> tuple[UploadedAssetMetadata, bytes]:
+def inspect_uploaded_asset(uploaded_file, *, max_bytes: int = MAX_SOURCE_BYTES, allowed_mime_types: set[str] | None = None) -> tuple[UploadedAssetMetadata, bytes]:
     """Read and validate a Django UploadedFile for the authoring pipeline.
 
     MIME declarations and file suffixes are checked against a small signature
@@ -136,7 +149,7 @@ def inspect_uploaded_asset(uploaded_file, *, max_bytes: int = MAX_SOURCE_BYTES) 
         mime = guessed_mime or declared_mime
     else:
         mime = declared_mime
-    if mime not in ALLOWED_MIME_TYPES:
+    if mime not in (allowed_mime_types or ALLOWED_MIME_TYPES):
         raise IngestionError(f"unsupported media type: {mime or 'unknown'}")
     if guessed_mime and guessed_mime != mime:
         raise IngestionError("file extension does not match the declared media type")

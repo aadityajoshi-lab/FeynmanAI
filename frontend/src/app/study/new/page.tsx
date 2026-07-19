@@ -1,5 +1,5 @@
-import StudyIntake from "@/components/StudyIntake";
+import NotebookIntake from "@/components/NotebookIntake";
 
 export default function NewStudyPage() {
-  return <StudyIntake />;
+  return <NotebookIntake />;
 }

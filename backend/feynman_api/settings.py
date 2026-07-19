@@ -77,6 +77,15 @@ TTS_VOXCPM_BASE_URL = configured("TTS_VOXCPM_BASE_URL", "")
 TTS_VOXCPM_API_KEY = configured("TTS_VOXCPM_API_KEY", "")
 TTS_VOXCPM_TIMEOUT_SECONDS = float(configured("TTS_VOXCPM_TIMEOUT_SECONDS", "90"))
 TTS_VOXCPM_PROMPT = configured("TTS_VOXCPM_PROMPT", "natural, clear engineering classroom voice")
+MISTRAL_API_KEY = configured("MISTRAL_API_KEY", "")
+MISTRAL_OCR_MODEL = configured("MISTRAL_OCR_MODEL", "mistral-ocr-4-0")
+MISTRAL_OCR_URL = configured("MISTRAL_OCR_URL", "https://api.mistral.ai/v1/ocr")
+MISTRAL_OCR_TIMEOUT_SECONDS = float(configured("MISTRAL_OCR_TIMEOUT_SECONDS", "180"))
+# OpenMAIC-style notebook copilot fallback. Keep search credentials server-only.
+TAVILY_API_KEY = configured("TAVILY_API_KEY", "")
+TAVILY_BASE_URL = configured("TAVILY_BASE_URL", "https://api.tavily.com")
+SEARXNG_BASE_URL = configured("SEARXNG_BASE_URL", "")
+WEB_SEARCH_TIMEOUT_SECONDS = float(configured("WEB_SEARCH_TIMEOUT_SECONDS", "25"))
 # The bounded study-source endpoint validates uploads at 50 MiB. Keep the
 # request parser just above that ceiling and spool larger files to disk rather
 # than rejecting ordinary lecture PDFs before the endpoint can inspect them.

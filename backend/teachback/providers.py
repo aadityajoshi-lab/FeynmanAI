@@ -461,6 +461,79 @@ def learner_stage_prompt(raw_prompt: Any, kind: str, topic_label: str) -> str:
     return prompts.get(kind, f"Explain {topic} and show how you would apply it.")
 
 
+def fireworks_recovery_manifest_schema(request: StudyPlanRequest) -> dict:
+    """Small recovery contract for Qwen JSON mode.
+
+    The full manifest contract is used for validation and repair, but putting
+    every nested constraint into a Qwen prompt can produce an empty object.
+    This shape keeps the learner-facing fields explicit without repeating all
+    production limits.
+    """
+    stage_schema = {
+        "type": "object",
+        "required": ["kind", "title", "prompt", "responseType", "options", "sourceAnchorIds"],
+        "properties": {
+            "kind": {"type": "string"},
+            "title": {"type": "string"},
+            "prompt": {"type": "string"},
+            "responseType": {"type": "string"},
+            "options": {"type": ["array", "null"], "items": {"type": "string"}},
+            "sourceAnchorIds": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+    action_schema = {
+        "type": "object",
+        "required": ["kind", "label", "payload"],
+        "properties": {"kind": {"type": "string"}, "label": {"type": "string"}, "payload": {"type": "object"}},
+    }
+    scene_schema = {
+        "type": "object",
+        "required": ["sceneId", "conceptId", "type", "title", "explanation", "keyPoints", "workedExample", "commonMistakes", "sourceAnchorIds", "actions", "config", "checkpoint", "stages"],
+        "properties": {
+            "sceneId": {"type": "string"}, "conceptId": {"type": "string"}, "type": {"type": "string"}, "title": {"type": "string"}, "explanation": {"type": "string"},
+            "keyPoints": {"type": "array", "items": {"type": "string"}}, "workedExample": {"type": ["string", "null"]}, "commonMistakes": {"type": "array", "items": {"type": "string"}}, "sourceAnchorIds": {"type": "array", "items": {"type": "string"}},
+            "actions": {"type": "array", "items": action_schema}, "config": {"type": "object"}, "checkpoint": {"type": ["object", "null"]}, "stages": {"type": "array", "items": stage_schema},
+        },
+    }
+    outline_schema = {
+        "type": "object",
+        "required": ["conceptId", "title", "objective", "sourceAnchorIds"],
+        "properties": {"conceptId": {"type": "string"}, "title": {"type": "string"}, "objective": {"type": "string"}, "sourceAnchorIds": {"type": "array", "items": {"type": "string"}}},
+    }
+    return {
+        "type": "object",
+        "required": ["studyPlanId", "sourceIds", "chapterSelection", "sourcePackVersion", "recordVersion", "outline", "scenes", "pastQuestionAnalysis"],
+        "properties": {
+            "studyPlanId": {"type": "string"}, "sourceIds": {"type": "array", "items": {"type": "string"}}, "chapterSelection": {"type": "string"}, "sourcePackVersion": {"type": "string"}, "recordVersion": {"type": "integer"},
+            "outline": {"type": "array", "items": outline_schema}, "scenes": {"type": "array", "items": scene_schema}, "pastQuestionAnalysis": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+
+
+def fireworks_recovery_topic_schema() -> dict:
+    """Small scene-only contract used when a full manifest is too ambitious."""
+    stage_schema = {
+        "type": "object",
+        "required": ["kind", "title", "prompt", "responseType", "options", "sourceAnchorIds"],
+        "properties": {
+            "kind": {"type": "string"}, "title": {"type": "string"}, "prompt": {"type": "string"}, "responseType": {"type": "string"},
+            "options": {"type": ["array", "null"], "items": {"type": "string"}}, "sourceAnchorIds": {"type": "array", "items": {"type": "string"}},
+        },
+    }
+    action_schema = {
+        "type": "object", "required": ["kind", "label", "payload"],
+        "properties": {"kind": {"type": "string"}, "label": {"type": "string"}, "payload": {"type": "object"}},
+    }
+    return {
+        "type": "object",
+        "required": ["sceneId", "conceptId", "type", "title", "explanation", "keyPoints", "workedExample", "commonMistakes", "sourceAnchorIds", "actions", "config", "checkpoint", "stages"],
+        "properties": {
+            "sceneId": {"type": "string"}, "conceptId": {"type": "string"}, "type": {"type": "string"}, "title": {"type": "string"}, "explanation": {"type": "string"},
+            "keyPoints": {"type": "array", "items": {"type": "string"}}, "workedExample": {"type": ["string", "null"]}, "commonMistakes": {"type": "array", "items": {"type": "string"}},
+            "sourceAnchorIds": {"type": "array", "items": {"type": "string"}}, "actions": {"type": "array", "items": action_schema}, "config": {"type": "object"},
+            "checkpoint": {"type": ["object", "null"]}, "stages": {"type": "array", "items": stage_schema},
+        },
+    }
 def normalize_live_study_plan(plan: dict, request: StudyPlanRequest) -> dict:
     """Normalize provider-shaped instructional metadata without adding lesson facts."""
     if not isinstance(plan.get("recordVersion"), int) or plan.get("recordVersion", 0) < 1:
@@ -1245,6 +1318,38 @@ class FireworksProvider(LLMProvider):
 
     def _chat_json(self, instruction: str, schema_name: str, schema: dict, *, attachment: dict | None = None) -> dict:
         last_error: Exception | None = None
+        # Qwen3 P7 Plus reliably follows JSON mode, but a verbatim nested
+        # manifest schema can cause it to emit an empty object. Give it the
+        # required field shape in a compact form and keep the complete schema
+        # enforcement in the normalizers and API validators below.
+        def schema_shape(value: object, depth: int = 0) -> object:
+            if depth > 4 or not isinstance(value, dict):
+                return "object"
+            value_type = value.get("type")
+            if isinstance(value_type, list):
+                value_type = " or ".join(str(item) for item in value_type)
+            properties = value.get("properties")
+            if isinstance(properties, dict):
+                return {
+                    "type": value_type or "object",
+                    "required": [str(item) for item in value.get("required", []) if item],
+                    "fields": {str(key): schema_shape(item, depth + 1) for key, item in properties.items()},
+                }
+            items = value.get("items")
+            if isinstance(items, dict):
+                return {"type": value_type or "array", "items": schema_shape(items, depth + 1)}
+            return {"type": value_type or "string"}
+
+        compact_shape = json.dumps(schema_shape(schema), ensure_ascii=False, separators=(",", ":"))
+        schema_hint = (
+            "studyPlanId, sourceIds, chapterSelection, sourcePackVersion, recordVersion, outline, scenes, and pastQuestionAnalysis. "
+            "Each scene must contain sceneId, conceptId, type, title, explanation, keyPoints, workedExample, commonMistakes, sourceAnchorIds, actions, config, checkpoint, and stages. "
+            "Each stage must contain kind, title, prompt, responseType, options, and sourceAnchorIds."
+            if schema_name.startswith("study_manifest")
+            else "The object must contain sceneId, conceptId, type, title, explanation, keyPoints, workedExample, commonMistakes, sourceAnchorIds, actions, config, checkpoint, and stages. Each stage contains kind, title, prompt, responseType, options, and sourceAnchorIds."
+            if schema_name.startswith("study_")
+            else f"matching this required field shape ({schema_name}): {compact_shape}."
+        )
         for attempt in range(2):
             try:
                 user_content: str | list[dict] = instruction
@@ -1253,6 +1358,19 @@ class FireworksProvider(LLMProvider):
                         {"type": "text", "text": instruction},
                         {"type": "image_url", "image_url": {"url": attachment["dataUrl"]}},
                     ]
+                if schema_name.startswith("study_"):
+                    system_content = (
+                        "You are a curriculum architect. Return only one valid JSON object and no markdown or commentary. "
+                        f"The object must contain {schema_hint} "
+                        "Use the exact source IDs and source anchor IDs supplied by the user."
+                    )
+                else:
+                    system_content = (
+                        "You are a rigorous curriculum architect. Return only one valid JSON object "
+                        f"{schema_hint} "
+                        "Use only the supplied source candidates. Never invent citations, quotes, facts, or source IDs. "
+                        "Draft content may require human review."
+                    )
                 response = self.client.chat.completions.create(
                     model=settings.FIREWORKS_MODEL,
                     temperature=0.0,
@@ -1260,18 +1378,26 @@ class FireworksProvider(LLMProvider):
                     # whiteboard actions, visualization config, and four
                     # checkpoints. Keep enough completion budget for the
                     # manifest instead of silently truncating it mid-object.
-                    max_tokens=20000,
+                    # Qwen3 P7 Plus can return an empty JSON object when the
+                    # requested completion ceiling is set above its practical
+                    # structured-output window. Keep enough room for a rich
+                    # scene while staying inside that reliable window.
+                    max_tokens=6000,
                     messages=[
                         {
                             "role": "system",
-                            "content": "You are a rigorous curriculum architect. Return only JSON matching the supplied schema. Use only the supplied source candidates. Never invent citations, quotes, facts, or source IDs. Draft content may require human review.",
+                            # Qwen3 P7 Plus accepts JSON-object mode but does
+                            # not accept the OpenAI strict json_schema payload.
+                            # Keep the contract in the prompt as well; the
+                            # server-side validators remain authoritative.
+                            "content": system_content,
                         },
                         {"role": "user", "content": user_content},
                     ],
-                    response_format={
-                        "type": "json_schema",
-                        "json_schema": {"name": schema_name, "schema": schema, "strict": True},
-                    },
+                    # Fireworks/Qwen rejects response_format.type=json_schema
+                    # with HTTP 400. json_object is supported and is still
+                    # constrained by the schema prompt plus our validators.
+                    response_format={"type": "json_object"},
                 )
                 message = response.choices[0].message.content if response.choices else ""
                 if isinstance(message, list):
@@ -1297,7 +1423,14 @@ class FireworksProvider(LLMProvider):
                 if attempt == 0:
                     continue
             except Exception as exc:
-                raise ProviderUnavailable(str(exc)) from exc
+                # Preserve the provider's safe diagnostic (status and request
+                # detail when supplied) so the API does not turn a model
+                # incompatibility, timeout, or rejected payload into the
+                # misleading generic message "Connection error." Never
+                # include credentials in this exception; the OpenAI-compatible
+                # SDK does not include authorization headers in its messages.
+                detail = str(exc).strip() or exc.__class__.__name__
+                raise ProviderUnavailable(f"Fireworks request failed: {detail}") from exc
         raise ProviderUnavailable(f"Fireworks returned malformed structured output after retry: {last_error}") from last_error
 
     def generate_study_plan(self, request: StudyPlanRequest) -> dict:
@@ -1318,7 +1451,10 @@ class FireworksProvider(LLMProvider):
             for span in request.source_spans
             if isinstance(span, dict) and span.get("candidateId")
         ]
-        source_context = json.dumps(compact_spans[:40], ensure_ascii=False)[:20000]
+        source_context = "\n".join(
+            f"[{span.get('candidateId')}] {str(span.get('text') or '').strip()[:900]}"
+            for span in compact_spans[:40]
+        )[:12000]
         guided_mode = not any(str(span.get("sourceKind") or "") not in {"guided_context"} for span in request.source_spans if isinstance(span, dict))
         goal_labels = {
             "course": "learn a course or subject",
@@ -1359,19 +1495,115 @@ class FireworksProvider(LLMProvider):
             f"Past-question source IDs: {request.past_question_source_ids or []}. If past-question sources are present, return up to six concise patterns in pastQuestionAnalysis and make application stages reflect those patterns; otherwise return an empty list. "
             f"Source candidates (candidate text is not automatically approved evidence): {source_context}"
         )
-        raw_result = self._chat_json(instruction, "study_manifest_v3", schema)
+        # The Fireworks/Qwen path uses the bounded authoring request below as
+        # its primary generation path. A full rich-manifest request can spend
+        # the provider timeout before the learner sees the first topic; the
+        # server enriches and validates this compact manifest afterward.
+        raw_result: dict = {}
         # A truncated structured response can be syntactically repairable while
         # still losing the top-level manifest. Give the model one focused retry
         # before entering per-scene repair; never let a malformed object become a
         # server exception or an empty learner module.
         if not isinstance(raw_result, dict) or not isinstance(raw_result.get("scenes"), list):
-            raw_result = self._chat_json(
-                instruction + " Return the complete top-level object with studyPlanId, sourceIds, chapterSelection, sourcePackVersion, recordVersion, outline, and scenes. Do not return a single scene or a partial object.",
-                "study_manifest_v3_retry",
-                schema,
+            recovery_reference = " ".join(
+                " ".join(str(span.get("text") or "").split())
+                for span in request.source_spans
+                if isinstance(span, dict)
+            )[:6000]
+            recovery_instruction = (
+                "Create one complete module. The top-level fields must be studyPlanId, sourceIds, chapterSelection, sourcePackVersion, recordVersion, outline, scenes, and pastQuestionAnalysis. "
+                f"Use sourceIds {request.source_ids}, chapterSelection {request.chapter_selection}, and source anchor ID {allowed_anchor_ids[0] if allowed_anchor_ids else 'source-anchor'}. "
+                f"Create one scene about {request.subject_title or request.subject_id}. Make the MCQ have three text options and make the scene include definition, mcq, formula or diagram or numerical, and teach_back stages. "
+                f"Reference material: {recovery_reference or 'General practice for the selected subject.'}"
             )
+            raw_result = self._chat_json(
+                recovery_instruction,
+                "study_manifest_v3_retry",
+                {"type": "object"},
+            )
+        # In plain-language JSON mode Qwen may return a useful topic under a
+        # compact `topicScene` envelope instead of the requested top-level
+        # manifest. Re-wrap that model-authored content; do not invent lesson
+        # facts or source evidence while restoring the server contract.
+        if isinstance(raw_result, dict) and not isinstance(raw_result.get("scenes"), list):
+            topic = raw_result.get("topicScene") or raw_result.get("scene")
+            if topic is None and (raw_result.get("title") or raw_result.get("explanation")):
+                topic = raw_result
+            if isinstance(topic, dict):
+                topic = dict(topic)
+                if not topic.get("explanation") and topic.get("description"):
+                    topic["explanation"] = topic.get("description")
+                if not topic.get("keyPoints") and topic.get("key_points"):
+                    topic["keyPoints"] = topic.get("key_points")
+                if not topic.get("commonMistakes") and topic.get("common_mistakes"):
+                    topic["commonMistakes"] = topic.get("common_mistakes")
+                if not topic.get("sourceAnchorIds") and topic.get("sourceAnchor"):
+                    topic["sourceAnchorIds"] = [topic.get("sourceAnchor")]
+                for stage in topic.get("stages") or []:
+                    if not isinstance(stage, dict):
+                        continue
+                    if not stage.get("kind") and stage.get("type"):
+                        stage["kind"] = stage.get("type")
+                    if not stage.get("prompt") and stage.get("content"):
+                        stage["prompt"] = stage.get("content")
+                    if not stage.get("sourceAnchorIds") and stage.get("sourceAnchor"):
+                        stage["sourceAnchorIds"] = [stage.get("sourceAnchor")]
+                topic.setdefault("type", "topic")
+                topic.setdefault("sceneId", "topic-1")
+                topic.setdefault("conceptId", str(topic.get("sceneId") or "topic-1"))
+                topic_anchors = list(topic.get("sourceAnchorIds") or [])
+                raw_result = {
+                    "studyPlanId": str(raw_result.get("studyPlanId") or "plan-live-fireworks"),
+                    "sourceIds": raw_result.get("sourceIds") or request.source_ids,
+                    "chapterSelection": raw_result.get("chapterSelection") or request.chapter_selection,
+                    "sourcePackVersion": str(raw_result.get("sourcePackVersion") or "draft"),
+                    "recordVersion": raw_result.get("recordVersion") or 1,
+                    "outline": raw_result.get("outline") or [{"conceptId": topic["conceptId"], "title": topic.get("title") or "Topic", "objective": topic.get("explanation") or "Understand this topic.", "sourceAnchorIds": topic_anchors}],
+                    "scenes": [topic],
+                    "pastQuestionAnalysis": raw_result.get("pastQuestionAnalysis") if isinstance(raw_result.get("pastQuestionAnalysis"), list) else [],
+                }
         if not isinstance(raw_result, dict) or not isinstance(raw_result.get("scenes"), list):
             raise ProviderOutputError("Fireworks returned an incomplete study manifest")
+        # These routing fields belong to the server request, not the model.
+        raw_result["sourceIds"] = list(request.source_ids)
+        raw_result["chapterSelection"] = request.chapter_selection
+        raw_result["recordVersion"] = 1
+        if not isinstance(raw_result.get("outline"), list):
+            raw_result["outline"] = []
+        if not isinstance(raw_result.get("pastQuestionAnalysis"), list):
+            raw_result["pastQuestionAnalysis"] = []
+        for outline in raw_result.get("outline") or []:
+            if not isinstance(outline, dict):
+                continue
+            if not outline.get("conceptId") and outline.get("id"):
+                outline["conceptId"] = outline.get("id")
+            if not outline.get("objective") and outline.get("description"):
+                outline["objective"] = outline.get("description")
+        for scene in raw_result.get("scenes") or []:
+            if not isinstance(scene, dict):
+                continue
+            if str(scene.get("type") or "") not in {"topic", "whiteboard", "two_d", "three_d", "predict_checkpoint", "retrieval", "teach_back", "exam_bridge", "question_bank"}:
+                scene["type"] = "topic"
+            for stage in scene.get("stages") or []:
+                if not isinstance(stage, dict):
+                    continue
+                if not stage.get("kind") and stage.get("type"):
+                    stage["kind"] = stage.get("type")
+                if not stage.get("prompt") and stage.get("content"):
+                    stage["prompt"] = stage.get("content")
+                if not stage.get("prompt") and stage.get("question"):
+                    stage["prompt"] = stage.get("question")
+        if not raw_result["outline"]:
+            raw_result["outline"] = [
+                {
+                    "conceptId": str(scene.get("conceptId") or scene.get("sceneId") or f"topic-{index + 1}"),
+                    "title": str(scene.get("title") or "Topic"),
+                    "objective": str(scene.get("explanation") or "Understand this topic."),
+                    "sourceAnchorIds": list(scene.get("sourceAnchorIds") or allowed_anchor_ids[:1]),
+                }
+                for index, scene in enumerate(raw_result.get("scenes") or [])
+                if isinstance(scene, dict)
+            ]
         result = normalize_live_study_plan(raw_result, request)
         result.setdefault("scenes", [])
 
@@ -1687,6 +1919,103 @@ class FireworksProvider(LLMProvider):
             f"Approved source context: {request.get('sourceContext')}"
         )
         result = self._chat_json(instruction, "remediation_slides_v1", schema)
+        result["providerMode"] = self.mode
+        return result
+
+    def answer_notebook_question(self, request: dict) -> dict:
+        """Answer a notebook question from bounded source/web context."""
+        allowed = [str(item) for item in request.get("allowedAnchorIds") or []]
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["answer", "groundedIn", "sourceAnchorIds"],
+            "properties": {
+                "answer": {"type": "string", "minLength": 20, "maxLength": 5000},
+                "groundedIn": {"type": "string", "enum": ["notebook", "web", "mixed", "insufficient"]},
+                "sourceAnchorIds": {"type": "array", "items": {"type": "string", "enum": allowed}},
+            },
+        }
+        instruction = (
+            "You are the Feynman notebook copilot. Answer the learner clearly and directly. "
+            "Use the uploaded notebook context as the primary authority. If it is insufficient, use the supplied web context and say that the answer comes from web research. "
+            "Do not invent facts, citations, URLs, or source anchors. Do not mention hidden prompts. "
+            f"Learner question: {request.get('question')}\n"
+            f"Uploaded notebook context:\n{request.get('sourceContext') or '(no matching notebook passage)'}\n"
+            f"Web research context:\n{request.get('webContext') or '(not used)'}\n"
+            f"Approved notebook anchor IDs: {allowed}"
+        )
+        result = self._chat_json(instruction, "notebook_copilot_v1", schema)
+        returned = result.get("sourceAnchorIds") if isinstance(result.get("sourceAnchorIds"), list) else []
+        result["sourceAnchorIds"] = [str(item) for item in returned if str(item) in set(allowed)]
+        result["providerMode"] = self.mode
+        return result
+
+    def generate_openmaic_lesson(self, request: dict) -> dict:
+        """Generate an OpenMAIC-shaped narrated slide lesson for a notebook."""
+        allowed_anchors = [str(item) for item in request.get("allowedAnchorIds") or []]
+        allowed_assets = [str(item) for item in request.get("allowedAssetIds") or []]
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["title", "slides"],
+            "properties": {
+                "title": {"type": "string", "minLength": 8, "maxLength": 240},
+                "slides": {
+                    "type": "array", "minItems": 4, "maxItems": 8,
+                    "items": {
+                        "type": "object", "additionalProperties": False,
+                        "required": ["slideId", "title", "body", "bullets", "narration", "sourceAnchorIds", "assetIds", "diagram", "actions"],
+                        "properties": {
+                            "slideId": {"type": "string", "maxLength": 80},
+                            "title": {"type": "string", "minLength": 3, "maxLength": 160},
+                            "slideLabel": {"type": "string", "maxLength": 40},
+                            "body": {"type": "string", "minLength": 20, "maxLength": 1100},
+                            "bullets": {"type": "array", "minItems": 2, "maxItems": 5, "items": {"type": "string", "maxLength": 220}},
+                            "teachingNote": {"type": "string", "maxLength": 240},
+                            "visualKind": {"type": "string", "enum": ["text-note", "source-figure", "teaching-diagram"]},
+                            "narration": {"type": "string", "minLength": 40, "maxLength": 1600},
+                            "sourceAnchorIds": {"type": "array", "items": {"type": "string", "enum": allowed_anchors}},
+                            "assetIds": {"type": "array", "items": {"type": "string", "enum": allowed_assets}},
+                            "diagram": {"type": "object", "additionalProperties": False, "required": ["nodes", "edges"], "properties": {
+                                "nodes": {"type": "array", "maxItems": 8, "items": {"type": "object", "additionalProperties": False, "required": ["id", "label"], "properties": {"id": {"type": "string", "maxLength": 40}, "label": {"type": "string", "maxLength": 100}}}},
+                                "edges": {"type": "array", "maxItems": 12, "items": {"type": "object", "additionalProperties": False, "required": ["from", "to"], "properties": {"from": {"type": "string", "maxLength": 40}, "to": {"type": "string", "maxLength": 40}}}},
+                            }},
+                            "actions": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "object", "additionalProperties": False, "required": ["kind", "label"], "properties": {"kind": {"type": "string", "enum": ["reveal", "highlight", "draw", "write", "pause"]}, "label": {"type": "string", "maxLength": 180}, "target": {"type": "string", "enum": ["title", "body", "bullet", "diagram", "asset", "canvas"]}, "targetIndex": {"type": "integer", "minimum": 0, "maximum": 7}}}},
+                        },
+                    },
+                },
+            },
+        }
+        instruction = (
+            "Create a polished OpenMAIC-style narrated slide lesson. It will be played as an automatically advancing visual lesson, not as a plain text answer. "
+            "Teach only the important points needed to answer the learner's request: orient, define, show the visual relationship, work through one application, then transfer the idea. Avoid filler, repeated summaries, and unrelated textbook material. "
+            "Use a warm handwritten lecture-note design with short readable text. Give each slide a short slideLabel and a teachingNote that states the learning purpose. Use source images when an allowed asset is relevant; otherwise create a clean hand-drawn-looking labeled diagram only when it clarifies structure or process. Do not force a diagram onto a definition-only slide, and never repeat the same diagram on every slide. "
+            "Every action must tell the player what to reveal or highlight and should include target=title, body, bullet, diagram, asset, or canvas; use targetIndex for a specific bullet or diagram node. The player will spotlight that target in a white rectangular focus box while dimming the rest of the slide. "
+            "Use only the supplied context and approved IDs. Never invent citations, URLs, values, or source evidence. "
+            f"Lesson request: {request.get('question')}\n"
+            f"Uploaded notebook context:\n{request.get('sourceContext') or '(no matching notebook passage)'}\n"
+            f"Web research context:\n{request.get('webContext') or '(not used)'}\n"
+            f"Allowed source anchors: {allowed_anchors}\nAllowed visual asset IDs: {allowed_assets}"
+        )
+        try:
+            result = self._chat_json(instruction, "openmaic_notebook_lesson_v1", schema)
+        except (ProviderUnavailable, ProviderOutputError, json.JSONDecodeError):
+            result = {}
+        # Qwen can occasionally honor the teaching content but return fewer
+        # scenes than the rich OpenMAIC contract requests. Reuse the already
+        # hardened remediation storyboard contract as a compatibility fallback
+        # instead of making the learner retry a whole lesson generation.
+        if not isinstance(result.get("slides"), list) or len(result.get("slides") or []) < 4:
+            result = self.generate_remediation_slides({
+                "topicTitle": request.get("question"),
+                "stageKind": "notebook_question",
+                "mistake": "The learner requested a guided explanation.",
+                "correctAnswer": "Teach the requested idea from the supplied context.",
+                "correction": "Connect the definition, visual relationship, application, and transfer check.",
+                "remediation": "Keep the lesson source-grounded and readable.",
+                "sourceContext": request.get("sourceContext"),
+                "approvedAnchorIds": allowed_anchors,
+            })
         result["providerMode"] = self.mode
         return result
 

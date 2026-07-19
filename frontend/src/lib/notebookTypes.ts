@@ -1,0 +1,9 @@
+export type NotebookGoal = "understand" | "exam" | "interview" | "viva" | "language";
+export type NotebookArtifactType = "summary" | "mcq" | "slides" | "formula_sheet" | "important_questions" | "flashcards" | "openmaic_lesson";
+
+export type NotebookBlock = { blockId: string; type: string; markdown: string; page?: number; section?: string; sourceAnchor?: string; assetId?: string; bbox?: unknown };
+export type NotebookSection = { sectionId: string; title: string; order: number; kind?: string; sourceIds: string[]; pages: number[]; blocks: NotebookBlock[] };
+export type NotebookPack = { version: string; notebookId: string; title: string; sources: string[]; sections: NotebookSection[]; supplementarySections?: NotebookSection[]; concepts: Array<Record<string, unknown>>; formulas: Array<{ formulaId: string; text: string; sectionId: string; sourceId: string; page?: number }>; assets: Array<{ assetId: string; type: string; mimeType?: string; page?: number; alt?: string; dataUrl?: string; url?: string; sourceId?: string }> };
+export type NotebookSource = { sourceId: string; title: string; filename?: string; sourceKind: string; mimeType?: string; status: string; extractionMethod: string; extraction: Record<string, unknown>; assets: Array<Record<string, unknown>> };
+export type NotebookArtifact = { artifactId: string; type: NotebookArtifactType; title: string; status: string; payload: Record<string, any>; createdAt: string };
+export type Notebook = { notebookId: string; title: string; subject: string; description: string; learningGoal: NotebookGoal; status: string; ocrProvider: string; stats: { sourceCount?: number; sectionCount?: number; assetCount?: number; formulaCount?: number }; sources: NotebookSource[]; knowledgePack: NotebookPack; knowledgePackMarkdown: string; artifacts: NotebookArtifact[] };
