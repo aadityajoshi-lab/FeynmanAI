@@ -10,11 +10,15 @@ def client():
     return APIClient()
 
 
+@pytest.mark.django_db
 def test_provider_status_does_not_expose_keys(client):
     response = client.get("/api/v1/providers")
     assert response.status_code == 200
     body = response.json()
-    assert {item["id"] for item in body["providers"]} == {"fireworks", "openai", "fixture"}
+    assert {item["id"] for item in body["providers"]} == {"mistral", "fireworks", "openai", "fixture"}
+    fireworks = next(item for item in body["providers"] if item["id"] == "fireworks")
+    assert {"id", "label", "available", "model", "configured", "reachable", "status", "lastErrorCategory", "lastSuccessAt"}.issubset(fireworks)
+    assert {"ready", "extracting", "failed", "localFallbackActive"}.issubset(body["sourceStatus"])
     assert all("key" not in json.dumps(item).lower() for item in body["providers"])
 
 

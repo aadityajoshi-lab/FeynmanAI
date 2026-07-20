@@ -1,354 +1,596 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
-import katex from "katex";
-import "katex/dist/katex.min.css";
-import { askNotebook, createNotebookArtifact, createNotebookLesson, getNotebook } from "@/lib/notebookApi";
-import type { Notebook, NotebookArtifact, NotebookArtifactType, NotebookSection } from "@/lib/notebookTypes";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  askNotebook,
+  createNotebookArtifact,
+  createNotebookLesson,
+  createNotebookNote,
+  deleteNotebookNote,
+  deleteNotebookSource,
+  getNotebook,
+  retryNotebookSource,
+  updateNotebookNote,
+  uploadNotebookSource,
+} from "@/lib/notebookApi";
+import { learningOsApi } from "@/lib/learningOsApi";
+import type { LearningActivity, LearningGoal } from "@/lib/learningOsTypes";
+import type { Notebook, NotebookArtifact, NotebookArtifactType, NotebookChatMessage, NotebookNote, NotebookSection, NotebookSource } from "@/lib/notebookTypes";
 
-const outputOptions: Array<{ type: NotebookArtifactType; label: string; description: string; icon: string }> = [
-  { type: "summary", label: "Study guide", description: "A calm, section-by-section overview.", icon: "✦" },
-  { type: "mcq", label: "MCQ test", description: "Check recall, then reveal the explanation.", icon: "◉" },
-  { type: "slides", label: "Slide lesson", description: "Turn the source into a visual sequence.", icon: "▤" },
-  { type: "formula_sheet", label: "Formula sheet", description: "Collect equations with source references.", icon: "∑" },
-  { type: "important_questions", label: "Important questions", description: "Prepare explanations and applications.", icon: "?" },
-  { type: "flashcards", label: "Flashcards", description: "Quick retrieval practice from every section.", icon: "▣" },
+type CenterView = "proof" | "chat" | "artifact" | "notes";
+type Drawer = "sources" | "studio" | null;
+type StudioArtifactType = Exclude<NotebookArtifactType, "openmaic_lesson">;
+type ProviderGenerationRetry = { kind: "artifact"; type: StudioArtifactType } | { kind: "lesson" } | null;
+
+const studioCards: Array<{ type: StudioArtifactType | "notes" | "openmaic_lesson"; label: string; description: string; icon: IconName; accent: string }> = [
+  { type: "summary", label: "Study guide", description: "A concise map of every saved topic.", icon: "spark", accent: "#111111" },
+  { type: "mcq", label: "Quiz", description: "Recall checks with source-backed answers.", icon: "quiz", accent: "#111111" },
+  { type: "slides", label: "Slide deck", description: "Turn the source into a visual sequence.", icon: "slides", accent: "#111111" },
+  { type: "flashcards", label: "Flashcards", description: "Practice retrieval from your material.", icon: "cards", accent: "#111111" },
+  { type: "formula_sheet", label: "Formula sheet", description: "Keep equations linked to their pages.", icon: "formula", accent: "#111111" },
+  { type: "data_table", label: "Source table", description: "Browse topics, pages, ideas, and formulas.", icon: "table", accent: "#111111" },
+  { type: "mind_map", label: "Mind map", description: "See the source structure at a glance.", icon: "mind", accent: "#111111" },
+  { type: "openmaic_lesson", label: "Narrated lesson", description: "A guided source-grounded explanation.", icon: "audio", accent: "#111111" },
+  { type: "notes", label: "Notebook notes", description: "Save your own thinking with citations.", icon: "note", accent: "#111111" },
 ];
 
-outputOptions.push({ type: "openmaic_lesson", label: "Narrated lesson", description: "OpenMAIC-style slides with actions, visuals, and voice.", icon: "▶" });
+const prompts = [
+  "Give me the big idea in plain language",
+  "What should I remember for an exam?",
+  "Explain one difficult concept step by step",
+];
 
-function blockText(section: NotebookSection) { return section.blocks.filter((block) => block.type.toLowerCase() !== "image").map((block) => block.markdown).filter(Boolean).join(" "); }
-function formatCount(value: number | undefined) { return String(value ?? 0).padStart(2, "0"); }
+function firstProofAnchor(notebook: Notebook) {
+  const block = notebook.knowledgePack.sections.flatMap((section) => section.blocks).find((item) => item.sourceAnchor || item.blockId);
+  return block?.sourceAnchor || block?.blockId || "";
+}
+
+function proofConcept(notebook: Notebook) {
+  const concept = notebook.knowledgePack.concepts[0];
+  if (concept && typeof concept.title === "string" && concept.title.trim()) return concept.title;
+  const section = notebook.knowledgePack.sections[0]?.title;
+  return section || notebook.title;
+}
+
+const ACCEPTED_FILES = "application/pdf,image/*,.txt,.md,.markdown,.csv,.docx,.pptx";
+
+type IconName = "add" | "audio" | "back" | "cards" | "check" | "chevron" | "close" | "delete" | "file" | "formula" | "guide" | "mind" | "more" | "note" | "panel" | "quiz" | "search" | "send" | "slides" | "spark" | "table" | "upload";
+
+function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
+  const common = { width: size, height: size, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.9, strokeLinecap: "round" as const, strokeLinejoin: "round" as const, "aria-hidden": true };
+  switch (name) {
+    case "add": return <svg {...common}><path d="M12 5v14M5 12h14" /></svg>;
+    case "audio": return <svg {...common}><path d="M4 12h2l2-6 4 12 2-6h2" /><path d="M18 8c1.5 1 1.5 7 0 8" /></svg>;
+    case "back": return <svg {...common}><path d="m15 18-6-6 6-6" /></svg>;
+    case "cards": return <svg {...common}><rect x="5" y="4" width="14" height="16" rx="2" /><path d="M8 8h8M8 12h6" /></svg>;
+    case "check": return <svg {...common}><path d="m5 12 4 4L19 6" /></svg>;
+    case "chevron": return <svg {...common}><path d="m9 18 6-6-6-6" /></svg>;
+    case "close": return <svg {...common}><path d="m6 6 12 12M18 6 6 18" /></svg>;
+    case "delete": return <svg {...common}><path d="M4 7h16M10 11v5M14 11v5M9 7l1-2h4l1 2M6 7l1 13h10l1-13" /></svg>;
+    case "file": return <svg {...common}><path d="M6 3h8l4 4v14H6z" /><path d="M14 3v5h5M9 13h6M9 17h4" /></svg>;
+    case "formula": return <svg {...common}><path d="M18 5H8l6 7-6 7h10" /><path d="M4 5h2M4 19h2" /></svg>;
+    case "guide": return <svg {...common}><path d="M5 4h14v16H5z" /><path d="M8 8h8M8 12h8M8 16h5" /></svg>;
+    case "mind": return <svg {...common}><circle cx="12" cy="12" r="2.5" /><circle cx="5" cy="6" r="2" /><circle cx="19" cy="6" r="2" /><circle cx="5" cy="18" r="2" /><circle cx="19" cy="18" r="2" /><path d="m10 10-3.5-3M14 10l3.5-3M10 14l-3.5 3M14 14l3.5 3" /></svg>;
+    case "more": return <svg {...common}><circle cx="5" cy="12" r="1" fill="currentColor" /><circle cx="12" cy="12" r="1" fill="currentColor" /><circle cx="19" cy="12" r="1" fill="currentColor" /></svg>;
+    case "note": return <svg {...common}><path d="M6 3h12v18H6z" /><path d="M9 8h6M9 12h6M9 16h4" /></svg>;
+    case "panel": return <svg {...common}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></svg>;
+    case "quiz": return <svg {...common}><circle cx="12" cy="12" r="8" /><path d="M9.5 9a2.6 2.6 0 1 1 4.3 2c-.9.7-1.8 1.2-1.8 2.5M12 17h.01" /></svg>;
+    case "search": return <svg {...common}><circle cx="10.5" cy="10.5" r="5.5" /><path d="m15 15 4 4" /></svg>;
+    case "send": return <svg {...common}><path d="m4 4 16 8-16 8 3-8z" /><path d="M7 12h13" /></svg>;
+    case "slides": return <svg {...common}><rect x="4" y="5" width="16" height="14" rx="2" /><path d="M8 9h8M8 13h5" /></svg>;
+    case "spark": return <svg {...common}><path d="m12 3 1.7 5.3L19 10l-5.3 1.7L12 17l-1.7-5.3L5 10l5.3-1.7z" /></svg>;
+    case "table": return <svg {...common}><rect x="4" y="5" width="16" height="14" rx="1" /><path d="M4 10h16M10 5v14" /></svg>;
+    case "upload": return <svg {...common}><path d="M12 16V4M8 8l4-4 4 4" /><path d="M5 15v4h14v-4" /></svg>;
+    default: return null;
+  }
+}
+
+function sourceMetric(source: NotebookSource, key: "pageCount" | "blockCount" | "assetCount") {
+  return Number(source.extraction?.[key] || 0);
+}
+
+function shortDate(value: string) {
+  try { return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(new Date(value)); } catch { return "saved"; }
+}
+
+function titleFromArtifact(type: NotebookArtifactType) {
+  return studioCards.find((card) => card.type === type)?.label || "Saved output";
+}
 
 export default function NotebookWorkspace({ notebookId }: { notebookId: string }) {
   const [notebook, setNotebook] = useState<Notebook | null>(null);
-  const [view, setView] = useState<"overview" | "sources" | "ask">("overview");
+  const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
+  const [centerView, setCenterView] = useState<CenterView>("proof");
   const [activeArtifact, setActiveArtifact] = useState<NotebookArtifact | null>(null);
-  const [generating, setGenerating] = useState<NotebookArtifactType | null>(null);
+  const [drawer, setDrawer] = useState<Drawer>(null);
   const [question, setQuestion] = useState("");
-  const [lessonComposerOpen, setLessonComposerOpen] = useState(false);
-  const [lessonDuration, setLessonDuration] = useState(120);
-  const [answer, setAnswer] = useState<{ text: string; sourceIds: string[]; groundedIn?: string; webSources?: Array<{ title: string; url: string; snippet?: string }> } | null>(null);
-  const [asking, setAsking] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [providerNotice, setProviderNotice] = useState("");
+  const [retryQuestion, setRetryQuestion] = useState("");
+  const [retryableQuestionError, setRetryableQuestionError] = useState("");
+  const [retryGeneration, setRetryGeneration] = useState<ProviderGenerationRetry>(null);
+  const [retrySource, setRetrySource] = useState<NotebookSource | null>(null);
+  const [noteDraft, setNoteDraft] = useState({ title: "", content: "", sourceIds: [] as string[], sourceAnchorIds: [] as string[] });
+  const [editingNote, setEditingNote] = useState<NotebookNote | null>(null);
+  const [proofGoal, setProofGoal] = useState<LearningGoal | null>(null);
+  const [proofResponse, setProofResponse] = useState("");
+  const [proofConclusion, setProofConclusion] = useState("");
+  const [proofConfidence, setProofConfidence] = useState<1 | 2 | 3 | 4 | 5>(3);
+  const [proofBusy, setProofBusy] = useState(false);
+  const [proofFeedback, setProofFeedback] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const retryFileInputRef = useRef<HTMLInputElement>(null);
 
-  const load = useCallback(async () => { try { setNotebook(await getNotebook(notebookId)); } catch (caught) { setError(caught instanceof Error ? caught.message : "Notebook could not be loaded."); } }, [notebookId]);
+  const load = useCallback(async () => {
+    try {
+      const data = await getNotebook(notebookId);
+      setNotebook(data);
+      setSelectedSourceIds((current) => {
+        const ready = data.sources.filter((source) => source.status === "ready" && source.groundingEnabled !== false).map((source) => source.sourceId);
+        const retained = current.filter((sourceId) => ready.includes(sourceId));
+        return retained.length || !ready.length ? retained : ready;
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Notebook could not be loaded.");
+    }
+  }, [notebookId]);
+
   useEffect(() => { void load(); }, [load]);
 
-  const pack = notebook?.knowledgePack;
-  const sourceCount = notebook?.stats.sourceCount || notebook?.sources.length || 0;
-  const readyCount = notebook?.sources.filter((source) => source.status === "ready").length || 0;
-  const selectedArtifact = activeArtifact || notebook?.artifacts.find((artifact) => artifact.status === "ready") || null;
+  useEffect(() => {
+    let live = true;
+    if (!notebook?.goalId) { setProofGoal(null); return () => { live = false; }; }
+    void learningOsApi.goal(notebook.goalId).then((goal) => { if (live) setProofGoal(goal); }).catch(() => { if (live) setProofGoal(null); });
+    return () => { live = false; };
+  }, [notebook?.goalId]);
 
-  async function makeArtifact(type: NotebookArtifactType) {
-    if (type === "openmaic_lesson") {
-      setView("ask");
-      setLessonComposerOpen(true);
-      setQuestion("");
-      setAnswer(null);
-      setError("");
-      return;
-    }
-    setError(""); setGenerating(type);
+  const readySources = useMemo(() => notebook?.sources.filter((source) => source.status === "ready") || [], [notebook]);
+  const groundingReadySources = useMemo(() => readySources.filter((source) => source.groundingEnabled !== false), [readySources]);
+  const activeSources = useMemo(() => groundingReadySources.filter((source) => selectedSourceIds.includes(source.sourceId)), [groundingReadySources, selectedSourceIds]);
+  const canUseSources = activeSources.length > 0;
+  const messages = useMemo(() => notebook?.chatMessages || [], [notebook]);
+  const notes = notebook?.notes || [];
+  const proofActivity = proofGoal?.activities?.find((activity) => activity.status !== "completed") || proofGoal?.activities?.[0] || null;
+
+  useEffect(() => {
+    const fallback = [...messages].reverse().find((item) => item.role === "assistant" && (item.degraded || item.providerUnavailable || item.status === "provider_unavailable"));
+    if (fallback) setProviderNotice(fallback.providerMessage || "A saved answer used the source-bounded fallback because the answer provider was temporarily unavailable. Citations still point only to selected sources; retry the question later for a generated explanation.");
+    else setProviderNotice("");
+  }, [messages]);
+
+  function closeDrawer() { setDrawer(null); }
+
+  function toggleSource(sourceId: string) {
+    const source = notebook?.sources.find((item) => item.sourceId === sourceId);
+    if (!source || source.status !== "ready" || source.groundingEnabled === false) return;
+    setSelectedSourceIds((current) => current.includes(sourceId) ? current.filter((id) => id !== sourceId) : [...current, sourceId]);
+  }
+
+  function selectAllSources() { setSelectedSourceIds(groundingReadySources.map((source) => source.sourceId)); }
+
+  async function uploadFiles(files: FileList | null) {
+    if (!files?.length || !notebook) return;
+    setBusy("upload"); setError("");
     try {
-      const artifact = await createNotebookArtifact(notebookId, type);
-      setActiveArtifact(artifact); await load();
-    } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not create this output."); } finally { setGenerating(null); }
+      let current = notebook;
+      for (const file of Array.from(files)) {
+        current = await uploadNotebookSource(notebookId, file, { sourceKind: "reference", ocrProvider: current.ocrProvider === "mistral-ocr-4-0" ? "mistral" : "auto" });
+      }
+      setNotebook(current);
+      setSelectedSourceIds(current.sources.filter((source) => source.status === "ready" && source.groundingEnabled !== false).map((source) => source.sourceId));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The source could not be added.");
+    } finally {
+      setBusy(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  function openSourcePicker() {
+    setRetrySource(null);
+    fileInputRef.current?.click();
+  }
+
+  function openSourceRetry(source: NotebookSource) {
+    setRetrySource(source);
+    retryFileInputRef.current?.click();
+  }
+
+  async function retrySourceExtraction(source: NotebookSource, files: FileList | null) {
+    const file = files?.[0];
+    if (!file || !notebook) return;
+    setBusy(`retry-${source.sourceId}`); setError("");
+    try {
+      const next = await retryNotebookSource(notebookId, source.sourceId, file, {
+        sourceKind: source.sourceKind,
+        ocrProvider: notebook.ocrProvider === "mistral-ocr-4-0" ? "mistral" : "auto",
+        title: source.title,
+        useForGrounding: source.groundingEnabled,
+      });
+      setNotebook(next);
+      setSelectedSourceIds((current) => {
+        const ready = next.sources.filter((item) => item.status === "ready" && item.groundingEnabled !== false).map((item) => item.sourceId);
+        const retained = current.filter((sourceId) => ready.includes(sourceId));
+        return retained.length || !ready.length ? retained : ready;
+      });
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The source could not be extracted. Select the file again to retry.");
+    } finally {
+      setBusy(null);
+      setRetrySource(null);
+      if (retryFileInputRef.current) retryFileInputRef.current.value = "";
+    }
+  }
+
+  function handleRetryFileSelection(files: FileList | null) {
+    const retry = retrySource;
+    if (retry) void retrySourceExtraction(retry, files);
+  }
+
+  async function removeSource(source: NotebookSource) {
+    if (!notebook || !window.confirm(`Remove ${source.title}? Its extracted context will be removed from this notebook.`)) return;
+    setBusy(`source-${source.sourceId}`); setError("");
+    try {
+      const next = await deleteNotebookSource(notebookId, source.sourceId);
+      setNotebook(next);
+      setSelectedSourceIds((current) => current.filter((id) => id !== source.sourceId));
+      if (activeArtifact?.sourceIds.includes(source.sourceId)) setActiveArtifact(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The source could not be removed.");
+    } finally { setBusy(null); }
+  }
+
+  async function submitQuestion(event?: FormEvent, questionOverride?: string) {
+    event?.preventDefault();
+    const asked = (questionOverride ?? question).trim();
+    if (!asked || !canUseSources || !notebook) return;
+    setBusy("ask"); setError(""); setProviderNotice(""); setRetryableQuestionError("");
+    setRetryQuestion(asked);
+    try {
+      const result = await askNotebook(notebookId, asked, selectedSourceIds);
+      setNotebook((current) => current ? { ...current, chatMessages: [...current.chatMessages, result.messages.user, result.messages.assistant] } : current);
+      if (result.degraded || result.providerUnavailable) setProviderNotice(result.providerMessage || "Feynman used a source-bounded fallback because the answer provider is temporarily unavailable. Citations still point only to your selected sources; retry the question later for a generated explanation.");
+      else setRetryQuestion("");
+      setQuestion("");
+      setCenterView("chat");
+    } catch (caught) {
+      const failure = caught instanceof Error ? caught.message : "The notebook could not answer that question.";
+      setError(failure); setRetryableQuestionError(failure);
+    } finally { setBusy(null); }
+  }
+
+  async function makeArtifact(type: StudioArtifactType) {
+    if (!canUseSources || !notebook) return;
+    setBusy(type); setError(""); setRetryGeneration(null);
+    try {
+      const artifact = await createNotebookArtifact(notebookId, type, selectedSourceIds);
+      setActiveArtifact(artifact);
+      setNotebook((current) => current ? { ...current, artifacts: [artifact, ...current.artifacts] } : current);
+      setCenterView("artifact"); closeDrawer();
+    } catch (caught) {
+      const failure = caught instanceof Error ? caught.message : "That studio tool could not be created.";
+      setError(failure);
+      if (/fireworks.*(?:unavailable|invalid)|configured fireworks provider/i.test(failure)) setRetryGeneration({ kind: "artifact", type });
+    } finally { setBusy(null); }
   }
 
   async function makeLesson() {
-    if (!question.trim()) return;
-    setError(""); setGenerating("openmaic_lesson");
-    try { const artifact = await createNotebookLesson(notebookId, question.trim(), lessonDuration); setActiveArtifact(artifact); await load(); }
-    catch (caught) { setError(caught instanceof Error ? caught.message : "The narrated lesson could not be created."); }
-    finally { setGenerating(null); }
+    if (!canUseSources || !notebook) return;
+    setBusy("openmaic_lesson"); setError(""); setRetryGeneration(null);
+    try {
+      const artifact = await createNotebookLesson(notebookId, question.trim() || "Create a guided lesson from this notebook.", 120, selectedSourceIds);
+      setActiveArtifact(artifact);
+      setNotebook((current) => current ? { ...current, artifacts: [artifact, ...current.artifacts] } : current);
+      setQuestion(""); setCenterView("artifact"); closeDrawer();
+    } catch (caught) {
+      const failure = caught instanceof Error ? caught.message : "The narrated lesson could not be created.";
+      setError(failure);
+      if (/fireworks.*(?:unavailable|invalid)|configured fireworks provider/i.test(failure)) setRetryGeneration({ kind: "lesson" });
+    } finally { setBusy(null); }
   }
 
-  async function ask() {
-    if (!question.trim()) return;
-    setAsking(true); setError("");
-    try { const result = await askNotebook(notebookId, question.trim()); setAnswer({ text: result.answer, sourceIds: result.sourceIds, groundedIn: result.groundedIn, webSources: result.webSources }); } catch (caught) { setError(caught instanceof Error ? caught.message : "The notebook could not answer."); } finally { setAsking(false); }
+  async function submitProof(event: FormEvent) {
+    event.preventDefault();
+    if (!notebook || !proofGoal || !proofActivity || !proofResponse.trim()) return;
+    setProofBusy(true); setProofFeedback(""); setError("");
+    const anchor = firstProofAnchor(notebook);
+    try {
+      const result = await learningOsApi.submitAttempt(proofGoal.goalId, {
+        activityId: proofActivity.activityId,
+        response: proofResponse.trim(),
+        writtenExplanation: proofResponse.trim(),
+        learnerConclusion: proofConclusion.trim(),
+        confidence: proofConfidence,
+        interactionState: { mode: "source_proof", concept: proofConcept(notebook), selectedSourceCount: activeSources.length },
+        sourceIds: activeSources.map((source) => source.sourceId),
+        sourceAnchorIds: anchor ? [anchor] : [],
+      });
+      setProofGoal(result.goal);
+      setProofFeedback(result.feedback?.evaluation?.feedback || result.evidence.summary || "Attempt recorded. Open the learning route for the next best task.");
+      setProofResponse(""); setProofConclusion("");
+    } catch (caught) {
+      setProofFeedback(caught instanceof Error ? caught.message : "The proof attempt could not be recorded.");
+    } finally { setProofBusy(false); }
   }
 
-  if (!notebook && !error) return <main className="notebook-loading"><span className="notebook-spinner" /><p>Opening your notebook…</p></main>;
-  if (!notebook) return <main className="notebook-loading"><strong>{error}</strong><Link href="/study/new">Back to notebooks</Link></main>;
+  function openNewNote(message?: NotebookChatMessage) {
+    setEditingNote(null);
+    setNoteDraft({
+      title: message ? "Notebook chat note" : "",
+      content: message?.content || "",
+      sourceIds: message?.sourceIds || selectedSourceIds,
+      sourceAnchorIds: message?.sourceAnchorIds || [],
+    });
+    setCenterView("notes"); closeDrawer();
+  }
 
-  return <main className="notebook-workspace-shell">
-    <header className="notebook-header notebook-workspace-header"><Link href="/" className="notebook-brand">feynman<span>.ai</span></Link><div className="notebook-breadcrumb"><span>NOTEBOOK</span><b>/</b><strong>{notebook.title}</strong></div><Link href="/study/new" className="notebook-new-link">＋ New notebook</Link></header>
-    <div className="notebook-workspace-grid">
-      <aside className="notebook-sidebar"><div className="notebook-side-intro"><span className="notebook-eyebrow">YOUR NOTEBOOK</span><h1>{notebook.title}</h1><p>{notebook.description || "A source-grounded workspace for learning, testing, and making ideas stick."}</p><div className="notebook-side-status"><span className="notebook-status-dot" /> {notebook.status === "ready" ? "Knowledge pack ready" : notebook.status}</div></div><nav className="notebook-side-nav" aria-label="Notebook sections"><button className={view === "overview" ? "active" : ""} onClick={() => { setView("overview"); setLessonComposerOpen(false); }}>⌂ <span>Overview</span><small>your source map</small></button><button className={view === "sources" ? "active" : ""} onClick={() => { setView("sources"); setLessonComposerOpen(false); }}>▤ <span>Sources</span><small>{readyCount} of {sourceCount} processed</small></button><button className={view === "ask" ? "active" : ""} onClick={() => setView("ask")}>◌ <span>Ask notebook</span><small>search your material</small></button></nav><div className="notebook-sidebar-footer"><span>EXTRACTION</span><strong>{notebook.ocrProvider === "mistral-ocr-4-0" ? "Mistral OCR 4" : "Local source reader"}</strong><small>Every output stays linked to source pages.</small></div></aside>
+  function openExistingNote(note: NotebookNote) {
+    setEditingNote(note);
+    setNoteDraft({ title: note.title, content: note.content, sourceIds: note.sourceIds, sourceAnchorIds: note.sourceAnchorIds });
+    setCenterView("notes"); closeDrawer();
+  }
 
-      <section className="notebook-main">
-        <div className="notebook-main-top"><div><span className="notebook-eyebrow">{view === "overview" ? "SOURCE DESK" : view === "sources" ? "SOURCE LIBRARY" : "NOTEBOOK COPILOT"}</span><h2>{view === "overview" ? "What would you like to make?" : view === "sources" ? "Your material, kept in order" : "Ask questions grounded in your sources"}</h2><p>{view === "overview" ? "The source pack is the foundation. Choose an output and Feynman will build it from the same structured content." : view === "sources" ? "Text, visual assets, page references, and extraction status stay visible so you can trust the pack." : "Answers are retrieved from the extracted notebook, with the source IDs that informed them."}</p></div><div className="notebook-stat-strip"><span><b>{formatCount(sourceCount)}</b> sources</span><span><b>{formatCount(pack?.sections.length)}</b> sections</span><span><b>{formatCount(pack?.assets.length)}</b> visuals</span></div></div>
+  async function saveNote() {
+    if (!notebook || !noteDraft.content.trim()) return;
+    setBusy("note"); setError("");
+    try {
+      if (editingNote) {
+        const updated = await updateNotebookNote(notebookId, editingNote.noteId, { title: noteDraft.title || "Untitled note", content: noteDraft.content });
+        setNotebook((current) => current ? { ...current, notes: current.notes.map((note) => note.noteId === updated.noteId ? updated : note) } : current);
+        setEditingNote(updated);
+      } else {
+        const created = await createNotebookNote(notebookId, noteDraft);
+        setNotebook((current) => current ? { ...current, notes: [created, ...current.notes] } : current);
+        setEditingNote(created);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The note could not be saved.");
+    } finally { setBusy(null); }
+  }
 
-        {error && <p className="notebook-error" role="alert">{error}</p>}
-        {view === "overview" && <>
-          <div className="notebook-output-grid">{outputOptions.map((option) => <button className="notebook-output-card" key={option.type} type="button" onClick={() => void makeArtifact(option.type)} disabled={Boolean(generating)}><span className="notebook-output-icon">{option.icon}</span><span><strong>{option.label}</strong><small>{option.description}</small></span><i>{generating === option.type ? "Building…" : "Create →"}</i></button>)}</div>
-          {selectedArtifact ? <ArtifactPanel artifact={selectedArtifact} /> : <section className="notebook-empty-panel"><span className="notebook-empty-orbit">✦</span><h3>Your first study tool is one click away.</h3><p>Start with a study guide for orientation, an MCQ test for recall, or slides when you want the big picture.</p></section>}
-          <section className="notebook-pack-preview"><div className="notebook-section-heading"><div><span className="notebook-eyebrow">STRUCTURED KNOWLEDGE PACK</span><h3>What Feynman found</h3></div><button type="button" onClick={() => setView("sources")}>Open source library →</button></div><div className="notebook-section-list">{(pack?.sections || []).slice(0, 6).map((section) => <SectionPreview key={section.sectionId} section={section} />)}</div></section>
-          {pack?.assets.length ? <section className="notebook-asset-strip"><div className="notebook-section-heading"><div><span className="notebook-eyebrow">VISUAL SOURCE ASSETS</span><h3>Images kept with their page context</h3></div><span>{pack.assets.length} assets</span></div><div className="notebook-asset-grid">{pack.assets.slice(0, 8).map((asset) => asset.dataUrl ? <figure key={asset.assetId}><img src={asset.dataUrl} alt={asset.alt || "Extracted source visual"} /><figcaption>{asset.alt || "Source visual"}{asset.page ? ` · p. ${asset.page}` : ""}</figcaption></figure> : <div className="notebook-asset-placeholder" key={asset.assetId}><span>VISUAL</span><strong>{asset.alt || "Extracted source visual"}</strong><small>{asset.page ? `page ${asset.page}` : "page context retained"}</small></div>)}</div></section> : null}
-        </>}
-        {view === "sources" && <SourceLibrary notebook={notebook} />}
-        {view === "ask" && <section className={`notebook-ask-panel ${lessonComposerOpen ? "notebook-lesson-composer-open" : ""}`}>
-          {lessonComposerOpen && <div className="notebook-lesson-composer-heading"><span className="notebook-eyebrow">OPENMAIC STUDY STUDIO</span><h3>What do you want to learn?</h3><p>Describe the exact idea, question, process, formula, or diagram you want taught. Feynman will build a source-grounded handwritten lesson around it.</p></div>}
-          <div className="notebook-ask-examples"><span>{lessonComposerOpen ? "LESSON IDEAS" : "TRY ASKING"}</span>{["Explain the main idea step by step", "Show the important formula and when to use it", "Teach this with a worked example and diagram"].map((item) => <button key={item} type="button" onClick={() => setQuestion(item)}>{item} ↗</button>)}</div>
-          <textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder={lessonComposerOpen ? "For example: Teach me how a digital instrumentation system works, including its block diagram and one practical example…" : "Ask anything about the material in this notebook…"} rows={lessonComposerOpen ? 7 : 5} />
-          <div className="notebook-ask-actions"><small>{answer ? `${answer.sourceIds.length} source${answer.sourceIds.length === 1 ? "" : "s"} used` : "Uploaded sources first · web context when needed"}</small><div className="notebook-ask-action-buttons"><button type="button" className="notebook-secondary-button" onClick={() => void ask()} disabled={asking || !question.trim()}>{asking ? "Searching…" : "Ask for a text answer"}</button><button type="button" className="notebook-primary-button" onClick={() => void makeLesson()} disabled={Boolean(generating) || !question.trim()}>{generating === "openmaic_lesson" ? "Building lesson…" : "Generate narrated lesson →"}</button></div><label className="notebook-duration-picker">Lesson length<select value={lessonDuration} onChange={(event) => setLessonDuration(Number(event.target.value))}><option value={60}>1 minute</option><option value={120}>2 minutes</option><option value={180}>3 minutes</option><option value={300}>5 minutes</option></select></label></div>
-          {answer && <div className="notebook-answer"><span className="notebook-eyebrow">NOTEBOOK ANSWER</span>{answer.text.split("\n\n").map((paragraph) => <p key={paragraph}>{paragraph}</p>)}<small>Sources: {answer.sourceIds.join(", ") || "none"}{answer.groundedIn ? ` · grounded in ${answer.groundedIn}` : ""}</small>{answer.webSources?.length ? <div className="notebook-web-sources">{answer.webSources.map((source) => <a key={source.url} href={source.url} target="_blank" rel="noreferrer">{source.title}</a>)}</div> : null}</div>}
-        </section>}
-        {view === "ask" && answer && <section className="notebook-ask-lesson-cta"><div><span className="notebook-eyebrow">OPENMAIC STUDY STUDIO</span><strong>Turn this answer into a narrated visual lesson</strong><small>OpenMAIC-style slides with guided actions, source visuals, diagrams, and optional voice.</small></div><button type="button" className="notebook-primary-button" onClick={() => void makeLesson()} disabled={Boolean(generating)}>{generating === "openmaic_lesson" ? "Building lesson…" : "Create narrated lesson →"}</button></section>}
-        {view === "ask" && selectedArtifact?.payload.kind === "openmaic_lesson" && <ArtifactPanel artifact={selectedArtifact} pack={notebook.knowledgePack} />}
+  async function removeNote(note: NotebookNote) {
+    if (!window.confirm(`Delete “${note.title}”?`)) return;
+    setBusy(`note-${note.noteId}`); setError("");
+    try {
+      await deleteNotebookNote(notebookId, note.noteId);
+      setNotebook((current) => current ? { ...current, notes: current.notes.filter((item) => item.noteId !== note.noteId) } : current);
+      if (editingNote?.noteId === note.noteId) openNewNote();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The note could not be deleted.");
+    } finally { setBusy(null); }
+  }
+
+  if (!notebook && !error) return <main className="nlm-loading"><span className="nlm-loader" /><p>Opening your notebook…</p></main>;
+  if (!notebook) return <main className="nlm-loading"><strong>{error}</strong><Link href="/sources">Back to Source Desk</Link></main>;
+
+  return <main className="nlm-shell">
+    <header className="nlm-topbar">
+      <Link href="/home" className="nlm-brand" aria-label="Feynman home">feynman<span>.ai</span></Link>
+        <div className="nlm-title"><strong>{notebook.title}</strong><span>{activeSources.length} of {groundingReadySources.length || 0} sources active · SOURCE → PROOF → EVIDENCE</span></div>
+      <div className="nlm-top-actions">
+        <button type="button" className="nlm-top-quiet" onClick={() => openNewNote()}><Icon name="note" size={15} /> Notes</button>
+        <Link href="/sources" className="nlm-create-button"><Icon name="add" size={16} /> Add source</Link>
+      </div>
+      <div className="nlm-mobile-actions"><button type="button" onClick={() => setDrawer(drawer === "sources" ? null : "sources")} aria-expanded={drawer === "sources"}><Icon name="panel" /></button><button type="button" onClick={() => setDrawer(drawer === "studio" ? null : "studio")} aria-expanded={drawer === "studio"}><Icon name="spark" /></button></div>
+    </header>
+
+    {drawer && <button type="button" className="nlm-drawer-scrim" aria-label="Close panel" onClick={closeDrawer} />}
+    <div className="nlm-workspace">
+      <aside className="nlm-panel nlm-sources" data-open={drawer === "sources"}>
+        <PanelHeading title="Sources" icon="file" onClose={closeDrawer} />
+        <div className="nlm-sources-body">
+          <input ref={fileInputRef} type="file" accept={ACCEPTED_FILES} multiple hidden onChange={(event) => void uploadFiles(event.target.files)} />
+          <input ref={retryFileInputRef} type="file" accept={ACCEPTED_FILES} hidden onChange={(event) => handleRetryFileSelection(event.target.files)} />
+          <button type="button" className="nlm-add-source" onClick={() => fileInputRef.current?.click()} disabled={busy === "upload"}><Icon name={busy === "upload" ? "more" : "add"} /> {busy === "upload" ? "Processing source…" : "Add sources"}</button>
+          <div className="nlm-source-context"><span><span className="nlm-memory-dot" /> Notebook memory</span><p>PDF text, visuals, and page anchors are stored with this notebook. Original files are not retained.</p></div>
+          {groundingReadySources.length > 1 && <div className="nlm-select-all"><button type="button" onClick={selectAllSources}>Select all</button><span>{selectedSourceIds.length} active</span></div>}
+          <div className="nlm-source-list">
+            {notebook.sources.length ? notebook.sources.map((source) => <GroundingSourceRow key={source.sourceId} source={source} selected={selectedSourceIds.includes(source.sourceId)} busy={busy === `source-${source.sourceId}` || busy === `retry-${source.sourceId}`} onToggle={() => toggleSource(source.sourceId)} onDelete={() => void removeSource(source)} onRetry={() => openSourceRetry(source)} />) : <EmptySources onAdd={openSourcePicker} />}
+          </div>
+        </div>
+      </aside>
+
+      <section className="nlm-panel nlm-center">
+        <div className="nlm-center-header">
+          <div className="nlm-center-tabs" role="tablist" aria-label="Notebook workspace views">
+            <button type="button" role="tab" aria-selected={centerView === "proof"} className={centerView === "proof" ? "active" : ""} onClick={() => setCenterView("proof")}>Proof task</button>
+            <button type="button" role="tab" aria-selected={centerView === "chat"} className={centerView === "chat" ? "active" : ""} onClick={() => setCenterView("chat")}>Ask source</button>
+            {centerView === "artifact" && <button type="button" role="tab" aria-selected className="active artifact-tab" onClick={() => setCenterView("artifact")}>{activeArtifact?.title || "Output"}</button>}
+            {centerView === "notes" && <button type="button" role="tab" aria-selected className="active artifact-tab" onClick={() => setCenterView("notes")}>Notes</button>}
+          </div>
+          {centerView !== "proof" && <button type="button" className="nlm-icon-button" aria-label="Return to proof task" onClick={() => setCenterView("proof")}><Icon name="back" /></button>}
+        </div>
+        {error && <div className="nlm-error" role="alert"><span>{error}</span><div className="nlm-error-actions">{retryQuestion && retryableQuestionError === error ? <button type="button" onClick={() => void submitQuestion(undefined, retryQuestion)} disabled={busy === "ask"}>Retry question</button> : null}{retryGeneration ? <button type="button" onClick={() => { if (retryGeneration.kind === "artifact") void makeArtifact(retryGeneration.type); else void makeLesson(); }} disabled={busy !== null}>Retry provider</button> : null}<button type="button" onClick={() => { setError(""); setRetryGeneration(null); }} aria-label="Dismiss error"><Icon name="close" size={14} /></button></div></div>}
+        {providerNotice ? <div className="nlm-provider-notice" role="alert"><div><strong>Answer provider unavailable</strong><p>{providerNotice}</p></div><div className="nlm-provider-actions">{retryQuestion ? <button type="button" onClick={() => void submitQuestion(undefined, retryQuestion)} disabled={busy === "ask"}>Retry provider</button> : null}<button type="button" onClick={() => setProviderNotice("")}>Dismiss</button></div></div> : null}
+        {centerView === "proof" && <ProofTaskCanvas notebook={notebook} activeSources={activeSources} goal={proofGoal} activity={proofActivity} response={proofResponse} conclusion={proofConclusion} confidence={proofConfidence} busy={proofBusy} feedback={proofFeedback} onResponse={setProofResponse} onConclusion={setProofConclusion} onConfidence={setProofConfidence} onSubmit={submitProof} />}
+        {centerView === "chat" && <ChatCanvas messages={messages} activeSources={activeSources} question={question} busy={busy === "ask"} canUseSources={canUseSources} onQuestion={onQuestion => setQuestion(onQuestion)} onSubmit={submitQuestion} onPrompt={setQuestion} onSaveMessage={openNewNote} />}
+        {centerView === "artifact" && activeArtifact && <ArtifactCanvas artifact={activeArtifact} pack={notebook.knowledgePack} onBack={() => setCenterView("proof")} />}
+        {centerView === "artifact" && !activeArtifact && <EmptyArtifact onBack={() => setCenterView("proof")} />}
+        {centerView === "notes" && <NotesCanvas notes={notes} draft={noteDraft} editing={editingNote} busy={busy === "note"} onDraft={setNoteDraft} onSave={() => void saveNote()} onNew={() => openNewNote()} onOpen={openExistingNote} onDelete={(note) => void removeNote(note)} />}
       </section>
+
+      <aside className="nlm-panel nlm-studio" data-open={drawer === "studio"}>
+        <PanelHeading title="Source tools" icon="spark" onClose={closeDrawer} />
+        <div className="nlm-studio-body">
+          <div className="nlm-studio-grid">
+            {studioCards.map((card) => <button key={card.type} type="button" className="nlm-studio-card" style={{ borderColor: card.accent }} disabled={!canUseSources && card.type !== "notes"} onClick={() => {
+              if (card.type === "notes") openNewNote();
+              else if (card.type === "openmaic_lesson") void makeLesson();
+              else void makeArtifact(card.type);
+            }}>
+              <span className="nlm-studio-icon" style={{ color: card.accent, backgroundColor: `${card.accent}17` }}><Icon name={card.icon} /></span>
+              <span><strong>{busy === card.type ? "Creating…" : card.label}</strong><small>{card.description}</small></span><Icon name="chevron" size={16} />
+            </button>)}
+          </div>
+          <div className="nlm-saved-heading"><span>Saved outputs</span><button type="button" onClick={() => openNewNote()}>Notes {notes.length}</button></div>
+          <div className="nlm-saved-list">
+            {notebook.artifacts.filter((artifact) => artifact.status === "ready").slice(0, 5).map((artifact) => <button type="button" key={artifact.artifactId} onClick={() => { setActiveArtifact(artifact); setCenterView("artifact"); closeDrawer(); }}><span className="nlm-saved-icon"><Icon name="file" size={15} /></span><span><strong>{artifact.title}</strong><small>{titleFromArtifact(artifact.type)} · {shortDate(artifact.createdAt)}</small></span><Icon name="chevron" size={15} /></button>)}
+            {!notebook.artifacts.some((artifact) => artifact.status === "ready") && <p className="nlm-empty-saved">Your generated study tools will appear here.</p>}
+          </div>
+          {notebook.artifacts.some((artifact) => artifact.status === "stale") && <p className="nlm-stale-note">Some saved outputs use a removed source and are safely marked stale.</p>}
+        </div>
+      </aside>
     </div>
   </main>;
 }
 
-function SectionPreview({ section }: { section: NotebookSection }) { return <article className="notebook-section-preview"><span>{String(section.order).padStart(2, "0")}</span><div><strong>{section.title}</strong><p>{blockText(section).slice(0, 210)}{blockText(section).length > 210 ? "…" : ""}</p></div><small>{section.pages.length ? `p. ${section.pages.join(", ")}` : "source"}</small></article>; }
+function PanelHeading({ title, icon, onClose }: { title: string; icon: IconName; onClose: () => void }) {
+  return <header className="nlm-panel-heading"><span><Icon name={icon} size={17} /> {title}</span><button type="button" className="nlm-panel-close" onClick={onClose} aria-label={`Close ${title} panel`}><Icon name="close" size={16} /></button></header>;
+}
 
-function SourceLibrary({ notebook }: { notebook: Notebook }) { return <section className="notebook-source-library"><div className="notebook-library-note"><span className="notebook-library-icon">✓</span><div><strong>Extraction is complete and reviewable</strong><p>Each file is processed independently before it contributes to the shared knowledge pack.</p></div></div><div className="notebook-source-library-list">{notebook.sources.map((source) => <article key={source.sourceId}><div className="notebook-source-status"><span className={source.status === "ready" ? "ready" : source.status === "failed" ? "failed" : "pending"}>{source.status === "ready" ? "✓" : source.status === "failed" ? "!" : "…"}</span><div><strong>{source.title}</strong><small>{source.filename || source.sourceKind} · {source.extractionMethod}</small></div></div><div className="notebook-source-metrics"><span>{String(source.extraction.pageCount || 0).padStart(2, "0")} pages</span><span>{String(source.extraction.blockCount || 0).padStart(2, "0")} blocks</span><span>{String(source.extraction.assetCount || 0).padStart(2, "0")} visuals</span></div></article>)}</div>{notebook.knowledgePackMarkdown && <details className="notebook-markdown"><summary>View compact Markdown knowledge pack</summary><pre>{notebook.knowledgePackMarkdown}</pre></details>}</section>; }
+function EmptySources({ onAdd }: { onAdd: () => void }) {
+  return <div className="nlm-empty-sources"><span><Icon name="upload" size={25} /></span><strong>Add your first source</strong><p>Upload a PDF, note, or slide deck to create this notebook’s saved context.</p><button type="button" onClick={onAdd}>Choose a file</button></div>;
+}
 
-function VisualSlidesLegacy({ artifact, pack }: { artifact: NotebookArtifact; pack?: Notebook["knowledgePack"] }) {
+function GroundingSourceRow({ source, selected, busy, onToggle, onDelete, onRetry }: { source: NotebookSource; selected: boolean; busy: boolean; onToggle: () => void; onDelete: () => void; onRetry: () => void }) {
+  const ready = source.status === "ready";
+  const failed = source.status === "failed";
+  const selectable = ready && source.groundingEnabled !== false;
+  return <article className={`nlm-source-row ${selected ? "selected" : ""} ${!ready ? "pending" : ""} ${!selectable && ready ? "view-only" : ""}`}>
+    <label><input type="checkbox" checked={selected} disabled={!selectable} onChange={onToggle} aria-label={selectable ? `Use ${source.title} as context` : `${source.title} is view-only and excluded from grounded answers`} /><span className="nlm-source-file"><Icon name="file" size={17} /></span><span className="nlm-source-copy"><strong>{source.title}</strong><small>{!ready ? failed ? "Extraction failed. Choose the file again to retry." : "Extracting..." : !selectable ? "View-only - excluded from grounded answers" : `${sourceMetric(source, "pageCount")} pages / ${sourceMetric(source, "blockCount")} blocks`}</small></span></label>
+    <div className="nlm-source-row-actions">{failed && source.retryAvailable !== false ? <button type="button" className="nlm-source-retry" disabled={busy} onClick={onRetry}>{busy ? "Retrying..." : "Retry extraction"}</button> : null}<button type="button" className="nlm-source-delete" disabled={busy} aria-label={`Remove ${source.title}`} onClick={onDelete}>{busy ? <Icon name="more" size={15} /> : <Icon name="delete" size={15} />}</button></div>
+  </article>;
+}
+
+function SourceRow({ source, selected, busy, onToggle, onDelete }: { source: NotebookSource; selected: boolean; busy: boolean; onToggle: () => void; onDelete: () => void }) {
+  const ready = source.status === "ready";
+  const groundingExcluded = ready && source.groundingEnabled === false;
+  return <article className={`nlm-source-row ${selected ? "selected" : ""} ${!ready ? "pending" : ""} ${groundingExcluded ? "view-only" : ""}`}>
+    <label><input type="checkbox" checked={selected} disabled={!ready} onChange={onToggle} aria-label={`Use ${source.title} as context`} /><span className="nlm-source-file"><Icon name="file" size={17} /></span><span className="nlm-source-copy"><strong>{source.title}</strong><small>{ready ? `${sourceMetric(source, "pageCount")} pages · ${sourceMetric(source, "blockCount")} blocks` : source.status === "failed" ? "Extraction failed" : "Extracting…"}</small></span></label>
+    <button type="button" className="nlm-source-delete" disabled={busy} aria-label={`Remove ${source.title}`} onClick={onDelete}>{busy ? <Icon name="more" size={15} /> : <Icon name="delete" size={15} />}</button>
+  </article>;
+}
+
+function ProofTaskCanvas({ notebook, activeSources, goal, activity, response, conclusion, confidence, busy, feedback, onResponse, onConclusion, onConfidence, onSubmit }: { notebook: Notebook; activeSources: NotebookSource[]; goal: LearningGoal | null; activity: LearningActivity | null; response: string; conclusion: string; confidence: 1 | 2 | 3 | 4 | 5; busy: boolean; feedback: string; onResponse: (value: string) => void; onConclusion: (value: string) => void; onConfidence: (value: 1 | 2 | 3 | 4 | 5) => void; onSubmit: (event: FormEvent) => void }) {
+  const concept = proofConcept(notebook);
+  const anchor = firstProofAnchor(notebook);
+  return <div className="nlm-proof-canvas">
+    <div className="nlm-proof-intro"><span className="nlm-kicker">THE FEYNMAN LOOP</span><h1>Turn this source into demonstrated understanding.</h1><p>Reading and generated answers stay in the desk. Only your prediction, explanation, or derivation can change learner evidence.</p><div className="nlm-proof-loop"><span>SOURCE</span><i>→</i><strong>ATTEMPT</strong><i>→</i><span>FEEDBACK</span><i>→</i><span>NEXT TASK</span></div></div>
+  {!activeSources.length ? <div className="nlm-proof-empty"><Icon name="file" size={25} /><h2>Select a ready source first</h2><p>The proof task is source-scoped. Choose a processed source in the left panel so the evaluator can cite a durable page or block anchor.</p></div> : !goal || !activity ? <div className="nlm-proof-empty"><Icon name="spark" size={25} /><h2>Build a goal before recording evidence</h2><p><strong>{concept}</strong> is ready to become a challenge, but this notebook is context memory only until it is attached to a learning goal.</p><Link href={`/?sourceNotebook=${encodeURIComponent(notebook.notebookId)}`} className="nlm-proof-cta">Start a learning goal from this source <Icon name="chevron" size={15} /></Link></div> : <form className="nlm-proof-form" onSubmit={onSubmit}><div className="nlm-proof-task-meta"><span>ACTIVE TASK</span><strong>{activity.type} · {activity.difficulty ? `difficulty ${activity.difficulty}` : "adaptive"}</strong></div><h2>{activity.prompt || `Explain ${concept} in a concrete case.`}</h2><p className="nlm-proof-boundary">Predict first. Use the selected source only to verify your reasoning after you commit.</p><div className="nlm-proof-source"><span>SELECTED SOURCE SIGNAL</span><strong>{concept}</strong><small>{anchor ? `Anchor ${anchor}` : "No durable anchor was extracted yet"}</small></div><label className="nlm-proof-field"><span>Your attempt</span><textarea value={response} onChange={(event) => onResponse(event.target.value)} placeholder="State a prediction, show the mechanism, and name what would falsify it…" rows={7} minLength={24} required /></label><label className="nlm-proof-field"><span>Learner conclusion</span><textarea value={conclusion} onChange={(event) => onConclusion(event.target.value)} placeholder="What did the evidence change in your understanding?" rows={3} /></label><label className="nlm-proof-field"><span>Confidence before feedback: {confidence}/5</span><input type="range" min={1} max={5} value={confidence} onChange={(event) => onConfidence(Number(event.target.value) as 1 | 2 | 3 | 4 | 5)} /></label><div className="nlm-proof-submit"><span>{activeSources.length} source selected · {anchor ? "citation anchor ready" : "citation pending"}</span><button type="submit" disabled={busy || response.trim().length < 24}>{busy ? "Evaluating…" : "Submit proof attempt"}<Icon name="send" size={16} /></button></div>{feedback ? <div className="nlm-proof-feedback" role="status"><strong>Route feedback</strong><p>{feedback}</p></div> : null}</form>}
+  </div>;
+}
+
+function ChatCanvas({ messages, activeSources, question, busy, canUseSources, onQuestion, onSubmit, onPrompt, onSaveMessage }: { messages: NotebookChatMessage[]; activeSources: NotebookSource[]; question: string; busy: boolean; canUseSources: boolean; onQuestion: (value: string) => void; onSubmit: (event?: FormEvent) => void; onPrompt: (value: string) => void; onSaveMessage: (message: NotebookChatMessage) => void }) {
+  return <div className="nlm-chat-canvas">
+    <div className="nlm-chat-scroll">
+      {!messages.length && <div className="nlm-chat-welcome"><div className="nlm-welcome-orb"><Icon name="spark" size={26} /></div><h1>What would you like to understand?</h1><p>Ask about your selected sources. Every answer stays tied to the page-aware memory saved in this notebook.</p><div className="nlm-prompt-grid">{prompts.map((prompt) => <button type="button" key={prompt} onClick={() => onPrompt(prompt)}>{prompt}<Icon name="chevron" size={15} /></button>)}</div></div>}
+      {messages.map((message) => <article className={`nlm-message ${message.role} ${message.status === "stale" ? "stale" : ""}`} key={message.messageId}><div className="nlm-message-avatar">{message.role === "assistant" ? <Icon name="spark" size={15} /> : "You"}</div><div className="nlm-message-content"><p>{message.content}</p>{message.status === "stale" ? <small className="nlm-stale-chip">A cited source was removed</small> : null}{message.role === "assistant" && <><CitationChips anchors={message.sourceAnchorIds} sourceIds={message.sourceIds} /><div className="nlm-message-actions"><button type="button" onClick={() => onSaveMessage(message)}><Icon name="note" size={14} /> Save to note</button><span>{message.groundedIn === "notebook" || !message.groundedIn ? "Source-grounded" : message.groundedIn}</span></div></>}</div></article>)}
+      {busy && <article className="nlm-message assistant thinking"><div className="nlm-message-avatar"><Icon name="spark" size={15} /></div><div className="nlm-typing"><i /><i /><i /></div></article>}
+    </div>
+    <form className="nlm-composer" onSubmit={onSubmit}><textarea value={question} onChange={(event) => onQuestion(event.target.value)} placeholder={canUseSources ? "Start typing…" : "Select at least one processed source first"} rows={2} disabled={!canUseSources || busy} /><div><span>{activeSources.length} source{activeSources.length === 1 ? "" : "s"} selected</span><button type="submit" disabled={!question.trim() || !canUseSources || busy} aria-label="Send question"><Icon name="send" size={19} /></button></div></form>
+  </div>;
+}
+
+function CitationChips({ anchors, sourceIds }: { anchors: string[]; sourceIds: string[] }) {
+  const items = (anchors.length ? anchors : sourceIds).filter((item, index, values) => values.indexOf(item) === index).slice(0, anchors.length ? 4 : 3);
+  if (!items.length) return null;
+  return <div className="nlm-citations">{items.map((item) => <span key={item}><Icon name="file" size={12} /> {item.length > 28 ? `${item.slice(0, 27)}…` : item}</span>)}</div>;
+}
+
+function EmptyArtifact({ onBack }: { onBack: () => void }) {
+  return <div className="nlm-empty-output"><span><Icon name="spark" size={28} /></span><h2>Create a source-grounded tool</h2><p>Select a Studio card to build a guide, quiz, slide deck, map, or other output from your saved source memory.</p><button type="button" onClick={onBack}>Back to chat</button></div>;
+}
+
+function ArtifactCanvas({ artifact, pack, onBack }: { artifact: NotebookArtifact; pack: Notebook["knowledgePack"]; onBack: () => void }) {
+  if (artifact.status !== "ready") return <div className="nlm-empty-output"><span><Icon name="file" size={28} /></span><h2>This output is stale</h2><p>One of its selected sources was removed. Generate it again from the current notebook memory.</p><button type="button" onClick={onBack}>Back to chat</button></div>;
   const payload = artifact.payload;
+  const providerLabel = artifact.provider === "fireworks" ? `Fireworks${artifact.model ? ` · ${artifact.model}` : ""}` : artifact.provider === "local_deterministic" ? "Local deterministic source structure" : null;
+  return <div className="nlm-artifact-canvas"><div className="nlm-artifact-top"><div><span className="nlm-kicker">SOURCE-GROUNDED OUTPUT</span><h1>{artifact.title}</h1><p>{artifact.sourceIds.length} selected source{artifact.sourceIds.length === 1 ? "" : "s"} · created {shortDate(artifact.createdAt)}{providerLabel ? ` · ${providerLabel}` : ""}</p></div><button type="button" onClick={onBack}><Icon name="back" size={16} /> Chat</button></div>
+    {payload.kind === "summary" && <SummaryArtifact payload={payload} />}
+    {payload.kind === "mcq" && <QuizArtifact payload={payload} />}
+    {payload.kind === "slides" && <SlidesArtifact payload={payload} pack={pack} />}
+    {payload.kind === "formula_sheet" && <FormulaArtifact payload={payload} />}
+    {payload.kind === "data_table" && <TableArtifact payload={payload} />}
+    {payload.kind === "mind_map" && <MindMapArtifact payload={payload} />}
+    {payload.kind === "flashcards" && <FlashcardsArtifact payload={payload} />}
+    {payload.kind === "important_questions" && <QuestionsArtifact payload={payload} />}
+    {payload.kind === "openmaic_lesson" && <LessonArtifact payload={payload} />}
+    {!payload.kind && <SummaryArtifact payload={payload} />}
+  </div>;
+}
+
+function SummaryArtifact({ payload }: { payload: Record<string, any> }) {
+  const sections = payload.sections || [];
+  return <div className="nlm-summary-list">{sections.length ? sections.map((section: any, index: number) => <article key={`${section.title}-${index}`}><span>{String(index + 1).padStart(2, "0")}</span><div><h3>{section.title}</h3><p>{section.summary}</p><CitationChips anchors={section.sourceAnchors || []} sourceIds={section.sourceIds || []} /></div></article>) : <p className="nlm-artifact-empty">No readable source sections were available for this output.</p>}</div>;
+}
+
+function QuizArtifact({ payload }: { payload: Record<string, any> }) {
+  const questions = payload.questions || [];
+  const [index, setIndex] = useState(0);
+  const [answer, setAnswer] = useState<number | null>(null);
+  const question = questions[index];
+  if (!question) return <p className="nlm-artifact-empty">No defensible quiz question could be built from the selected sources.</p>;
+  const reveal = answer !== null;
+  return <div className="nlm-quiz"><div className="nlm-quiz-meta"><span>QUESTION {index + 1} OF {questions.length}</span><span>{question.topicTitle || "Source topic"}</span></div><h2>{question.question}</h2><div className="nlm-quiz-options">{(question.options || []).map((option: string, optionIndex: number) => <button type="button" key={`${option}-${optionIndex}`} disabled={reveal} className={reveal && optionIndex === question.answerIndex ? "correct" : reveal && optionIndex === answer ? "incorrect" : ""} onClick={() => setAnswer(optionIndex)}><b>{String.fromCharCode(65 + optionIndex)}</b><span>{option}</span></button>)}</div>{reveal && <div className="nlm-quiz-answer"><strong>{answer === question.answerIndex ? "Correct" : "Review this one"}</strong><p>{question.explanation}</p><CitationChips anchors={question.sourceAnchors || []} sourceIds={question.sourceIds || []} /></div>}<div className="nlm-artifact-nav"><button type="button" onClick={() => { setIndex((value) => Math.max(0, value - 1)); setAnswer(null); }} disabled={index === 0}>Previous</button><button type="button" onClick={() => { setIndex((value) => Math.min(questions.length - 1, value + 1)); setAnswer(null); }} disabled={!reveal || index === questions.length - 1}>Next question</button></div></div>;
+}
+
+function SlidesArtifact({ payload, pack }: { payload: Record<string, any>; pack: Notebook["knowledgePack"] }) {
   const slides = payload.slides || [];
-  const [slideIndex, setSlideIndex] = useState(0);
-  if (!slides.length) return <section className="notebook-artifact-panel notebook-empty-artifact"><span className="notebook-eyebrow">SLIDE LESSON</span><h3>No learner-ready slides yet</h3><p>The source pack did not contain enough structured teaching sections for a reliable slide lesson.</p></section>;
-  const slide = slides[slideIndex] || {};
-  const sourceAssets = payload.assets || pack?.assets || [];
-  const assets = (slide.assetIds || []).map((id: string) => sourceAssets.find((asset: any) => asset.assetId === id)).filter(Boolean);
-  return <section className="notebook-artifact-panel"><div className="notebook-artifact-heading"><div><span className="notebook-eyebrow">GENERATED OUTPUT · SLIDE LESSON</span><h3>{artifact.title}</h3></div><span>{slideIndex + 1} / {slides.length}</span></div><div className="notebook-slide"><span className="notebook-slide-number">SLIDE {String(slideIndex + 1).padStart(2, "0")}</span><h4>{slide.title}</h4><p>{slide.body}</p><ul>{(slide.bullets || []).map((bullet: string) => <li key={bullet}>{bullet}</li>)}</ul>{assets.length ? <div className="notebook-slide-assets">{assets.map((asset: any) => <figure key={asset.assetId}><img src={asset.dataUrl || asset.url} alt={asset.alt || "Source visual"} /><figcaption>{asset.alt || "Source visual"}{asset.page ? ` · p. ${asset.page}` : ""}</figcaption></figure>)}</div> : null}<NotebookDiagram diagram={slide.diagram} /><div className="notebook-visual-placeholder"><span>SOURCE-GROUNDED VISUAL</span><strong>{slide.visualHint}</strong><small>Labels are teaching aids; the accompanying text remains anchored to the extracted source.</small></div></div><div className="notebook-artifact-controls"><button type="button" onClick={() => setSlideIndex((index) => Math.max(0, index - 1))} disabled={slideIndex === 0}>← Previous</button><button type="button" onClick={() => setSlideIndex((index) => Math.min(slides.length - 1, index + 1))} disabled={slideIndex >= slides.length - 1}>Next slide →</button></div></section>;
+  const [index, setIndex] = useState(0);
+  const slide = slides[index];
+  if (!slide) return <p className="nlm-artifact-empty">No slide sequence could be created from the selected sources.</p>;
+  const assets = (slide.assetIds || []).map((id: string) => (payload.assets || pack.assets || []).find((asset: any) => asset.assetId === id)).filter(Boolean);
+  return <div className="nlm-slide"><span className="nlm-slide-count">SLIDE {String(index + 1).padStart(2, "0")} / {String(slides.length).padStart(2, "0")}</span><div className="nlm-slide-layout"><div><span className="nlm-kicker">{slide.slideLabel || "KEY IDEA"}</span><h2>{slide.title}</h2><p>{slide.body}</p>{slide.bullets?.length ? <ul>{slide.bullets.map((bullet: string) => <li key={bullet}>{bullet}</li>)}</ul> : null}<CitationChips anchors={slide.sourceAnchors || []} sourceIds={slide.sourceIds || []} /></div>{assets.length ? <div className="nlm-slide-visual">{assets.slice(0, 1).map((asset: any) => <figure key={asset.assetId}><img src={asset.dataUrl || asset.url} alt={asset.alt || "Source visual"} /><figcaption>{asset.alt || "Source visual"}{asset.page ? ` · p. ${asset.page}` : ""}</figcaption></figure>)}</div> : slide.diagram?.nodes?.length ? <MiniDiagram diagram={slide.diagram} /> : <div className="nlm-slide-placeholder"><Icon name="mind" size={30} /><span>{slide.visualHint || "Source-backed idea"}</span></div>}</div><div className="nlm-artifact-nav"><button type="button" onClick={() => setIndex((value) => Math.max(0, value - 1))} disabled={index === 0}>Previous slide</button><button type="button" onClick={() => setIndex((value) => Math.min(slides.length - 1, value + 1))} disabled={index === slides.length - 1}>Next slide</button></div></div>;
 }
 
-function VisualSlides({ artifact, pack }: { artifact: NotebookArtifact; pack?: Notebook["knowledgePack"] }) {
-  const payload = artifact.payload;
-  const slides = (payload.slides || []) as Array<any>;
-  const [slideIndex, setSlideIndex] = useState(0);
-  if (!slides.length) return <section className="notebook-artifact-panel notebook-empty-artifact"><span className="notebook-eyebrow">SLIDE LESSON</span><h3>No learner-ready slides yet</h3><p>The source pack did not contain enough structured teaching sections for a reliable visual lesson.</p></section>;
-  const slide = slides[slideIndex] || {};
-  const sourceAssets = payload.assets || pack?.assets || [];
-  const assets = (slide.assetIds || []).map((id: string) => sourceAssets.find((asset: any) => asset.assetId === id)).filter(Boolean);
-  return <section className="notebook-artifact-panel notebook-handwritten-output">
-    <div className="notebook-artifact-heading"><div><span className="notebook-eyebrow">GENERATED OUTPUT · HANDWRITTEN SLIDE LESSON</span><h3>{artifact.title}</h3><p className="notebook-artifact-subtitle">Read the note, follow the figure, then explain the highlighted relationship.</p></div><span>{slideIndex + 1} / {slides.length}</span></div>
-    <div className="openmaic-lesson-stage notebook-slide-stage"><div className="openmaic-lesson-topline"><span>SLIDE {String(slideIndex + 1).padStart(2, "0")}</span><span>{slide.visualKind === "source-figure" ? "SOURCE FIGURE" : slide.visualKind === "teaching-diagram" ? "TEACHING DIAGRAM" : "SOURCE NOTE"}</span></div>
-      <div className="openmaic-slide-canvas notebook-standard-slide"><div className="openmaic-slide-title"><span className="openmaic-slide-kicker">{slide.slideLabel || "SOURCE NOTE"}</span><h4>{slide.title}</h4></div><p className="openmaic-lesson-body">{slide.body}</p>{slide.bullets?.length ? <ul className="openmaic-lesson-bullets">{slide.bullets.map((bullet: string, index: number) => <li key={`${bullet}-${index}`}>{bullet}</li>)}</ul> : null}{assets.length ? <div className="notebook-slide-assets">{assets.map((asset: any) => <figure key={asset.assetId}><img src={asset.dataUrl || asset.url} alt={asset.alt || "Source figure"} /><figcaption>{asset.alt || "Source figure"}{asset.page ? ` · p. ${asset.page}` : ""}</figcaption></figure>)}</div> : null}{slide.diagram?.nodes?.length ? <HanddrawnDiagram diagram={slide.diagram} /> : null}<div className="openmaic-focus"><span className="notebook-eyebrow">TEACHING NOTE</span><strong>{slide.teachingNote || slide.visualHint || "Connect the highlighted terms to the source explanation."}</strong></div></div>
-    </div>
-    <div className="notebook-artifact-controls"><button type="button" onClick={() => setSlideIndex((index) => Math.max(0, index - 1))} disabled={slideIndex === 0}>← Previous slide</button><button type="button" className="notebook-primary-button" onClick={() => setSlideIndex((index) => Math.min(slides.length - 1, index + 1))} disabled={slideIndex >= slides.length - 1}>Next slide →</button></div>
-  </section>;
+function FormulaArtifact({ payload }: { payload: Record<string, any> }) {
+  const formulas = payload.formulas || [];
+  return <div className="nlm-formula-list">{formulas.length ? formulas.map((formula: any) => <article key={formula.formulaId || formula.text}><strong>{formula.text}</strong><span>{formula.sourceId}{formula.page ? ` · page ${formula.page}` : ""}</span></article>) : <p className="nlm-artifact-empty">No equation-like source text was detected in the selected sources.</p>}</div>;
 }
 
-function VisualSlidesModern({ artifact, pack }: { artifact: NotebookArtifact; pack?: Notebook["knowledgePack"] }) {
-  const slides = (artifact.payload.slides || []) as Array<any>;
-  const [slideIndex, setSlideIndex] = useState(0);
-  if (!slides.length) return <section className="notebook-artifact-panel notebook-empty-artifact"><span className="notebook-eyebrow">SLIDE LESSON</span><h3>No learner-ready slides yet</h3><p>The source pack did not contain enough structured teaching sections for a reliable visual lesson.</p></section>;
-  const slide = slides[slideIndex] || {};
-  const sourceAssets = artifact.payload.assets || pack?.assets || [];
-  const assets = (slide.assetIds || []).map((id: string) => sourceAssets.find((asset: any) => asset.assetId === id)).filter(Boolean);
-  const hasVisual = Boolean(assets.length || slide.diagram?.nodes?.length);
-  return <section className="notebook-artifact-panel notebook-handwritten-output">
-    <div className="notebook-artifact-heading"><div><span className="notebook-eyebrow">GENERATED OUTPUT · SLIDE LESSON</span><h3>{artifact.title}</h3><p className="notebook-artifact-subtitle">A concise teaching note with a source figure or a process diagram where it clarifies the idea.</p></div><span>{slideIndex + 1} / {slides.length}</span></div>
-    <div className="openmaic-lesson-stage notebook-slide-stage"><div className="openmaic-lesson-topline"><span>SLIDE {String(slideIndex + 1).padStart(2, "0")}</span><span>{slide.visualKind === "source-figure" ? "SOURCE FIGURE" : slide.visualKind === "teaching-diagram" ? "TEACHING DIAGRAM" : "SOURCE NOTE"}</span></div>
-      <div className={`openmaic-slide-canvas notebook-standard-slide ${hasVisual ? "has-visual" : "text-only"}`}>
-        <div className="notebook-slide-copy"><div className="openmaic-slide-title"><span className="openmaic-slide-kicker">{slide.slideLabel || "KEY IDEA"}</span><h4>{slide.title}</h4></div><p className="openmaic-lesson-body">{slide.body}</p>{slide.bullets?.length ? <ul className="openmaic-lesson-bullets">{slide.bullets.map((bullet: string, index: number) => <li key={`${bullet}-${index}`}>{bullet}</li>)}</ul> : null}</div>
-        {hasVisual ? <aside className="notebook-slide-visual" aria-label="Source-grounded visual">{assets.length ? <div className="notebook-slide-assets">{assets.map((asset: any) => <figure key={asset.assetId}><img src={asset.dataUrl || asset.url} alt={asset.alt || "Source figure"} /><figcaption>{asset.alt || "Source figure"}{asset.page ? ` · p. ${asset.page}` : ""}</figcaption></figure>)}</div> : null}{slide.diagram?.nodes?.length ? <HanddrawnDiagram diagram={slide.diagram} /> : null}</aside> : null}
-        <div className="openmaic-focus"><span className="notebook-eyebrow">TEACHING NOTE</span><strong>{slide.teachingNote || "Connect the highlighted terms to the source explanation."}</strong></div>
-      </div>
-    </div>
-    <div className="notebook-artifact-controls"><button type="button" onClick={() => setSlideIndex((index) => Math.max(0, index - 1))} disabled={slideIndex === 0}>Previous slide</button><button type="button" className="notebook-primary-button" onClick={() => setSlideIndex((index) => Math.min(slides.length - 1, index + 1))} disabled={slideIndex >= slides.length - 1}>Next slide</button></div>
-  </section>;
+function TableArtifact({ payload }: { payload: Record<string, any> }) {
+  const rows = payload.rows || [];
+  return <div className="nlm-data-table-wrap"><p className="nlm-table-note">{payload.note}</p><div className="nlm-data-table"><table><thead><tr><th>Topic</th><th>Pages</th><th>Key idea</th><th>Formulas</th></tr></thead><tbody>{rows.map((row: any) => <tr key={row.topic}><td><strong>{row.topic}</strong></td><td>{(row.pages || []).join(", ") || "—"}</td><td>{row.keyIdea}</td><td>{(row.formulas || []).join(" · ") || "—"}</td></tr>)}</tbody></table></div></div>;
 }
 
-function NotebookDiagram({ diagram }: { diagram?: { nodes?: Array<{ id: string; label: string }>; edges?: Array<{ from: string; to: string }> } }) {
-  const nodes = diagram?.nodes || [];
-  if (!nodes.length) return null;
-  const width = Math.max(720, nodes.length * 175);
-  const nodeWidth = Math.min(150, Math.max(112, (width - 80) / nodes.length - 18));
-  const xFor = (index: number) => 28 + index * ((width - nodeWidth - 56) / Math.max(1, nodes.length - 1));
-  return <div className="notebook-diagram"><span className="notebook-diagram-label">CONCEPT MAP</span><svg viewBox={`0 0 ${width} 150`} role="img" aria-label="Source-grounded concept map">{(diagram?.edges || []).map((edge) => { const from = nodes.findIndex((node) => node.id === edge.from); const to = nodes.findIndex((node) => node.id === edge.to); return <line key={`${edge.from}-${edge.to}`} x1={xFor(from) + nodeWidth} y1="75" x2={xFor(to)} y2="75" stroke="#b8c1ec" strokeWidth="3" markerEnd="url(#notebook-arrow)" />; })}<defs><marker id="notebook-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8995d4" /></marker></defs>{nodes.map((node, index) => <g key={node.id}><rect x={xFor(index)} y="43" width={nodeWidth} height="64" rx="12" fill={index === 0 || index === nodes.length - 1 ? "#fff1df" : "#f7f8ff"} stroke={index === 0 || index === nodes.length - 1 ? "#e9a24d" : "#b9c2ea"} strokeWidth="2" /><text x={xFor(index) + nodeWidth / 2} y="70" textAnchor="middle" fill="#252a4b" fontSize="12" fontWeight="700"><tspan x={xFor(index) + nodeWidth / 2} dy="0">{node.label.length > 22 ? `${node.label.slice(0, 21)}…` : node.label}</tspan></text></g>)}</svg></div>;
+function MindMapArtifact({ payload }: { payload: Record<string, any> }) {
+  const nodes = payload.nodes || [];
+  const root = nodes.find((node: any) => node.kind === "root") || nodes[0];
+  const topics = nodes.filter((node: any) => node.id !== root?.id);
+  if (!root) return <p className="nlm-artifact-empty">No source topics are available for a mind map.</p>;
+  return <div className="nlm-mind-map"><p>{payload.note}</p><div className="nlm-mind-root"><Icon name="mind" size={20} /><strong>{root.label}</strong></div><div className="nlm-mind-branches">{topics.map((topic: any) => <article key={topic.id}><span className="nlm-mind-line" /><h3>{topic.label}</h3><p>{topic.detail}</p><CitationChips anchors={topic.sourceAnchors || []} sourceIds={topic.sourceIds || []} /></article>)}</div></div>;
 }
 
-function normalizeFormulaText(raw: string) {
-  return String(raw || "")
-    .replace(/\*\*/g, "")
-    .replace(/\\\\/g, "\\")
-    .replace(/\\\s+/g, " ")
-    .replace(/\\_/g, "_")
-    .trim();
+function MiniDiagram({ diagram }: { diagram: { nodes?: Array<{ id: string; label: string }>; edges?: Array<{ from: string; to: string }> } }) {
+  const nodes = diagram.nodes || [];
+  return <div className="nlm-mini-diagram">{nodes.map((node) => <span key={node.id}>{node.label}</span>)}</div>;
 }
 
-function FormulaParts({ raw }: { raw: string }) {
-  const text = normalizeFormulaText(raw);
-  const match = text.match(/\$\$([\s\S]*?)\$\$|\$([\s\S]*?)\$/);
-  const math = (match?.[1] || match?.[2] || (/[\\^_=]|\\frac|\\sqrt|\\times|\\Delta/.test(text) ? text : "")).trim();
-  const explanation = match ? `${text.slice(0, match.index).trim()} ${text.slice((match.index || 0) + match[0].length).trim()}`.trim() : "";
-  if (!math) return <p className="notebook-formula-prose">{text}</p>;
-  const html = katex.renderToString(math, { displayMode: true, throwOnError: false, strict: "ignore" });
-  return <><div className="notebook-formula-math" dangerouslySetInnerHTML={{ __html: html }} />{explanation ? <p className="notebook-formula-prose">{explanation}</p> : null}</>;
-}
-
-function FormulaSheet({ artifact }: { artifact: NotebookArtifact }) {
-  const formulas = artifact.payload.formulas || [];
-  return <section className="notebook-artifact-panel"><div className="notebook-artifact-heading"><div><span className="notebook-eyebrow">GENERATED OUTPUT · QUICK REFERENCE</span><h3>{artifact.title}</h3><p className="notebook-artifact-subtitle">Readable equations with the original source page retained.</p></div><span>{formulas.length} formulas</span></div><div className="notebook-formula-list">{formulas.length ? formulas.map((formula: any) => <article key={formula.formulaId}><FormulaParts raw={formula.text} /><small>{formula.sourceId}{formula.page ? ` · page ${formula.page}` : ""}</small></article>) : <p>No equation-like lines were detected yet.</p>}</div></section>;
-}
-
-function OpenMAICLesson({ artifact }: { artifact: NotebookArtifact }) {
-  const payload = artifact.payload;
-  const slides = (payload.slides || []) as Array<any>;
-  const [slideIndex, setSlideIndex] = useState(0);
-  const [actionIndex, setActionIndex] = useState(0);
-  const [playing, setPlaying] = useState(false);
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const slide = slides[slideIndex] || {};
-  const assets = (slide.assetIds || []).map((id: string) => (payload.assets || []).find((asset: any) => asset.assetId === id)).filter(Boolean);
-  const actions = slide.actions || [];
-
-  useEffect(() => { setActionIndex(0); }, [slideIndex]);
-  useEffect(() => {
-    if (!playing || !slides.length) return;
-    const narration = String(slide.narration || slide.body || "");
-    const audioUrl = slide.audio?.dataUrl;
-    if (audioUrl && audioRef.current) {
-      audioRef.current.src = audioUrl;
-      audioRef.current.currentTime = 0;
-      void audioRef.current.play().catch(() => setPlaying(false));
-      return () => { audioRef.current?.pause(); };
-    }
-    if (typeof window !== "undefined" && "speechSynthesis" in window && narration) {
-      window.speechSynthesis.cancel();
-      const speech = new SpeechSynthesisUtterance(narration);
-      speech.rate = 0.94;
-      speech.onend = () => setSlideIndex((index) => index >= slides.length - 1 ? (setPlaying(false), index) : index + 1);
-      window.speechSynthesis.speak(speech);
-      return () => window.speechSynthesis.cancel();
-    }
-    const timer = window.setTimeout(() => setSlideIndex((index) => index >= slides.length - 1 ? (setPlaying(false), index) : index + 1), Math.max(8, Number(slide.durationSeconds || 12)) * 1000);
-    return () => window.clearTimeout(timer);
-  }, [playing, slide, slides.length]);
-  useEffect(() => {
-    if (!playing || actions.length < 2) return;
-    const timer = window.setInterval(() => setActionIndex((index) => Math.min(actions.length - 1, index + 1)), Math.max(1200, (Number(slide.durationSeconds || 12) * 1000) / actions.length));
-    return () => window.clearInterval(timer);
-  }, [playing, slide.durationSeconds, actions.length]);
-
-  function next() { setSlideIndex((index) => Math.min(slides.length - 1, index + 1)); }
-  function previous() { setSlideIndex((index) => Math.max(0, index - 1)); }
-  return <section className="notebook-artifact-panel openmaic-lesson"><div className="notebook-artifact-heading"><div><span className="notebook-eyebrow">OPENMAIC STUDY STUDIO · NARRATED SLIDES</span><h3>{payload.title || artifact.title}</h3><p className="notebook-artifact-subtitle">A source-grounded visual lesson with guided actions and automatic progression.</p></div><span>{slideIndex + 1} / {slides.length}</span></div><div className="openmaic-lesson-stage"><div className="openmaic-lesson-topline"><span>SCENE {String(slideIndex + 1).padStart(2, "0")}</span><span>{payload.groundedIn || "notebook"} · {payload.voiceProviderId ? "voice ready" : "browser narration"}</span></div><h4>{slide.title}</h4><p className="openmaic-lesson-body">{slide.body}</p>{slide.bullets?.length ? <ul className="openmaic-lesson-bullets">{slide.bullets.map((bullet: string) => <li key={bullet}>{bullet}</li>)}</ul> : null}{assets.length ? <div className="notebook-slide-assets">{assets.map((asset: any) => <figure key={asset.assetId}><img src={asset.dataUrl || asset.url} alt={asset.alt || "Source visual"} /><figcaption>{asset.alt || "Source visual"}{asset.page ? ` · p. ${asset.page}` : ""}</figcaption></figure>)}</div> : null}<NotebookDiagram diagram={slide.diagram} /><div className="openmaic-action-rail"><span className="notebook-eyebrow">TEACHING ACTIONS</span>{actions.map((action: any, index: number) => <button key={`${action.kind}-${index}`} type="button" className={index === actionIndex ? "active" : ""} onClick={() => setActionIndex(index)}><small>{action.kind}</small><strong>{action.label}</strong></button>)}</div><div className="openmaic-focus"><span className="notebook-eyebrow">TEACHING FOCUS</span><strong>{actions[actionIndex]?.label || "Follow the explanation and connect it to the visual."}</strong></div></div><audio ref={audioRef} controls className="openmaic-audio" onEnded={next} /><div className="notebook-artifact-controls"><button type="button" onClick={previous} disabled={slideIndex === 0}>← Previous scene</button><button type="button" className="notebook-primary-button" onClick={() => setPlaying((value) => !value)}>{playing ? "Pause lesson" : "Play narrated lesson"}</button><button type="button" onClick={next} disabled={slideIndex >= slides.length - 1}>Next scene →</button></div></section>;
-}
-
-type LessonSpotlight = { kind: "title" | "body" | "bullet" | "diagram" | "asset" | "canvas"; index?: number };
-
-function lessonSpotlight(action: any, slide: any, actionIndex: number): LessonSpotlight | null {
-  const allowed = ["title", "body", "bullet", "diagram", "asset", "canvas"];
-  let kind = allowed.includes(action?.target) ? action.target as LessonSpotlight["kind"] : action?.kind === "draw" ? "diagram" : action?.kind === "write" ? "title" : action?.kind === "highlight" ? "bullet" : "body";
-  const bullets = Array.isArray(slide.bullets) ? slide.bullets : [];
-  const assets = Array.isArray(slide.assetIds) ? slide.assetIds : [];
-  const nodes = Array.isArray(slide.diagram?.nodes) ? slide.diagram.nodes : [];
-  if (kind === "bullet" && !bullets.length) kind = "body";
-  if (kind === "asset" && !assets.length) kind = nodes.length ? "diagram" : "body";
-  if (kind === "diagram" && !nodes.length) kind = "body";
-  if (kind === "canvas") return { kind };
-  const size = kind === "bullet" ? bullets.length : kind === "asset" ? assets.length : kind === "diagram" ? nodes.length : 1;
-  const index = ["bullet", "asset", "diagram"].includes(kind) ? Math.min(Math.max(0, Number(action?.targetIndex ?? actionIndex)), Math.max(0, size - 1)) : undefined;
-  return { kind, index };
-}
-
-function OpenMAICSpotlightLesson({ artifact }: { artifact: NotebookArtifact }) {
-  const payload = artifact.payload;
-  const slides = (payload.slides || []) as Array<any>;
-  const [slideIndex, setSlideIndex] = useState(0);
-  const [actionIndex, setActionIndex] = useState(0);
-  const [playing, setPlaying] = useState(false);
-  const audioRef = useRef<HTMLAudioElement>(null);
-  const slide = slides[slideIndex] || {};
-  const actions = slide.actions || [];
-  const spotlight = lessonSpotlight(actions[actionIndex], slide, actionIndex);
-  const hasSpotlight = Boolean(spotlight && spotlight.kind !== "canvas");
-  const itemClass = (kind: LessonSpotlight["kind"], index?: number) => !hasSpotlight ? "" : spotlight?.kind === kind && spotlight.index === index ? "is-focused" : "is-dimmed";
-  const assets = (slide.assetIds || []).map((id: string) => (payload.assets || []).find((asset: any) => asset.assetId === id)).filter(Boolean);
-
-  useEffect(() => { setActionIndex(0); }, [slideIndex]);
-  useEffect(() => {
-    if (!playing || !slides.length) return;
-    const narration = String(slide.narration || slide.body || "");
-    const audio = audioRef.current;
-    if (slide.audio?.dataUrl && audio) {
-      audio.src = slide.audio.dataUrl;
-      audio.currentTime = 0;
-      void audio.play().catch(() => setPlaying(false));
-      return () => audio.pause();
-    }
-    if (typeof window !== "undefined" && "speechSynthesis" in window && narration) {
-      window.speechSynthesis.cancel();
-      const speech = new SpeechSynthesisUtterance(narration);
-      speech.rate = 0.94;
-      speech.onend = () => setSlideIndex((index) => index >= slides.length - 1 ? (setPlaying(false), index) : index + 1);
-      window.speechSynthesis.speak(speech);
-      return () => window.speechSynthesis.cancel();
-    }
-    const timer = window.setTimeout(() => setSlideIndex((index) => index >= slides.length - 1 ? (setPlaying(false), index) : index + 1), Math.max(8, Number(slide.durationSeconds || 12)) * 1000);
-    return () => window.clearTimeout(timer);
-  }, [playing, slideIndex, slide.narration, slide.body, slide.audio?.dataUrl, slide.durationSeconds, slides.length]);
-  useEffect(() => {
-    if (!playing || actions.length < 2) return;
-    const timer = window.setInterval(() => setActionIndex((index) => Math.min(actions.length - 1, index + 1)), Math.max(1200, (Number(slide.durationSeconds || 12) * 1000) / actions.length));
-    return () => window.clearInterval(timer);
-  }, [playing, slide.durationSeconds, actions.length]);
-
-  function next() { setSlideIndex((index) => Math.min(slides.length - 1, index + 1)); }
-  function previous() { setSlideIndex((index) => Math.max(0, index - 1)); }
-  return <section className="notebook-artifact-panel openmaic-lesson"><div className="notebook-artifact-heading"><div><span className="notebook-eyebrow">OPENMAIC STUDY STUDIO · NARRATED SLIDES</span><h3>{payload.title || artifact.title}</h3><p className="notebook-artifact-subtitle">Handwritten-style teaching slides with source visuals, diagrams, and guided focus.</p></div><span>{slideIndex + 1} / {slides.length}</span></div><div className={`openmaic-lesson-stage ${hasSpotlight ? "has-spotlight" : ""}`}><div className="openmaic-lesson-topline"><span>SCENE {String(slideIndex + 1).padStart(2, "0")}</span><span>{payload.groundedIn || "notebook"} · {payload.voiceProviderId ? "voice ready" : "browser narration"}</span></div><div className={`openmaic-slide-canvas ${hasSpotlight ? "has-spotlight" : ""}`}><div className={`openmaic-spotlight-item openmaic-slide-title ${itemClass("title")}`}><span className="openmaic-slide-kicker">{slide.slideLabel || "KEY IDEA"}</span><h4>{slide.title}</h4></div><div className={`openmaic-spotlight-item ${itemClass("body")}`}><p className="openmaic-lesson-body">{slide.body}</p></div>{slide.bullets?.length ? <ul className="openmaic-lesson-bullets">{slide.bullets.map((bullet: string, index: number) => <li key={`${bullet}-${index}`} className={`openmaic-spotlight-item ${itemClass("bullet", index)}`}>{bullet}</li>)}</ul> : null}{assets.length ? <div className={`notebook-slide-assets openmaic-spotlight-item ${itemClass("asset", 0)}`}>{assets.map((asset: any) => <figure key={asset.assetId}><img src={asset.dataUrl || asset.url} alt={asset.alt || "Source visual"} /><figcaption>{asset.alt || "Source visual"}{asset.page ? ` · p. ${asset.page}` : ""}</figcaption></figure>)}</div> : null}{slide.diagram?.nodes?.length ? <div className={`openmaic-spotlight-item ${itemClass("diagram")}`}><HanddrawnDiagram diagram={slide.diagram} focusNodeIndex={spotlight?.kind === "diagram" ? spotlight.index : undefined} /></div> : null}</div><div className="openmaic-action-rail"><span className="notebook-eyebrow">TEACHING ACTIONS · click a point to replay its focus</span>{actions.map((action: any, index: number) => <button key={`${action.kind}-${index}`} type="button" className={index === actionIndex ? "active" : ""} onClick={() => setActionIndex(index)}><small>{action.kind}{action.target ? ` · ${action.target}` : ""}</small><strong>{action.label}</strong></button>)}</div><div className="openmaic-focus"><span className="notebook-eyebrow">NOW TEACHING</span><strong>{actions[actionIndex]?.label || "Follow the explanation and connect it to the visual."}</strong><small>The white rectangle is the current focus. Everything else is softened so one important point stays clear.</small></div></div><audio ref={audioRef} controls className="openmaic-audio" onEnded={next} /><div className="notebook-artifact-controls"><button type="button" onClick={previous} disabled={slideIndex === 0}>← Previous scene</button><button type="button" className="notebook-primary-button" onClick={() => setPlaying((value) => !value)}>{playing ? "Pause lesson" : "Play narrated lesson"}</button><button type="button" onClick={next} disabled={slideIndex >= slides.length - 1}>Next scene →</button></div></section>;
-}
-
-function HanddrawnDiagram({ diagram, focusNodeIndex }: { diagram?: { nodes?: Array<{ id: string; label: string }>; edges?: Array<{ from: string; to: string }> }; focusNodeIndex?: number }) {
-  const nodes = diagram?.nodes || [];
-  if (!nodes.length) return null;
-  const width = Math.max(760, nodes.length * 200);
-  const nodeWidth = Math.min(174, Math.max(138, (width - 96) / nodes.length - 18));
-  const xFor = (index: number) => 28 + index * ((width - nodeWidth - 56) / Math.max(1, nodes.length - 1));
-  const linesFor = (label: string) => { const lines: string[] = []; let current = ""; for (const word of String(label || "").split(/\s+/)) { if ((current + " " + word).trim().length > 18 && current) { lines.push(current); current = word; } else current = `${current} ${word}`.trim(); } if (current) lines.push(current); return lines.slice(0, 3); };
-  return <div className="notebook-diagram notebook-diagram-handdrawn"><span className="notebook-diagram-label">HAND-DRAWN VISUAL MODEL · FOLLOW THE FOCUS</span><svg viewBox={`0 0 ${width} 184`} role="img" aria-label="Hand-drawn source-grounded concept map">{(diagram?.edges || []).map((edge) => { const from = nodes.findIndex((node) => node.id === edge.from); const to = nodes.findIndex((node) => node.id === edge.to); if (from < 0 || to < 0) return null; return <line key={`${edge.from}-${edge.to}`} x1={xFor(from) + nodeWidth} y1="92" x2={xFor(to)} y2="92" stroke="#8995d4" strokeWidth="3" strokeLinecap="round" markerEnd="url(#handdrawn-arrow)" />; })}<defs><marker id="handdrawn-arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#7784ca" /></marker></defs>{nodes.map((node, index) => { const lines = linesFor(node.label); const focused = focusNodeIndex === index; return <g key={node.id} className={focused ? "notebook-diagram-node-focused" : ""} transform={`rotate(${index % 2 ? 0.7 : -0.7} ${xFor(index) + nodeWidth / 2} 92)`}><rect x={xFor(index)} y="52" width={nodeWidth} height="80" rx="15" fill={focused ? "#fff3d5" : "#fbfbff"} stroke={focused ? "#e69a39" : "#aeb9e8"} strokeWidth={focused ? "3" : "2"} strokeDasharray="2 1" /><text x={xFor(index) + nodeWidth / 2} y={92 - (lines.length - 1) * 7} textAnchor="middle" fill="#252a4b" fontSize="12" fontWeight="700" fontFamily="Segoe Print, Bradley Hand, cursive">{lines.map((line, lineIndex) => <tspan key={line} x={xFor(index) + nodeWidth / 2} dy={lineIndex === 0 ? 0 : 15}>{line}</tspan>)}</text></g>; })}</svg></div>;
-}
-
-function FlashcardDeck({ artifact }: { artifact: NotebookArtifact }) {
-  const cards = (artifact.payload.cards || []) as Array<any>;
+function FlashcardsArtifact({ payload }: { payload: Record<string, any> }) {
+  const cards = payload.cards || [];
   const [index, setIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
-  const card = cards[index] || {};
-  if (!cards.length) return <section className="notebook-artifact-panel notebook-empty-artifact"><span className="notebook-eyebrow">RETRIEVAL PRACTICE</span><h3>No defensible flashcards yet</h3><p>Feynman needs a readable definition, relationship, parameter, correction, or formula before it creates a card.</p></section>;
-  function move(step: number) { setIndex((value) => Math.min(cards.length - 1, Math.max(0, value + step))); setRevealed(false); }
-  return <section className="notebook-artifact-panel notebook-flashcard-deck"><div className="notebook-artifact-heading"><div><span className="notebook-eyebrow">GENERATED OUTPUT · RETRIEVAL PRACTICE</span><h3>{artifact.title}</h3><p className="notebook-artifact-subtitle">Answer aloud first. Reveal only after you commit, then connect the explanation to the source.</p></div><span>{index + 1} / {cards.length}</span></div><button type="button" className={`notebook-flashcard ${revealed ? "revealed" : ""}`} onClick={() => setRevealed((value) => !value)} aria-label={revealed ? "Hide flashcard answer" : "Reveal flashcard answer"}><span className="notebook-flashcard-kicker">{revealed ? "SOURCE-BACKED ANSWER" : card.tag || "CHECK YOUR RECALL"}</span><strong>{revealed ? card.back : card.front}</strong><small>{revealed ? "Click to hide the answer" : "Click to reveal · say your answer first"}</small></button><div className="notebook-flashcard-meta"><span>Source-grounded</span>{card.sourceAnchors?.[0] ? <span>{card.sourceAnchors[0]}</span> : null}</div><div className="notebook-artifact-controls"><button type="button" onClick={() => move(-1)} disabled={index === 0}>← Previous card</button><button type="button" className="notebook-primary-button" onClick={() => setRevealed((value) => !value)}>{revealed ? "Hide answer" : "Reveal answer"}</button><button type="button" onClick={() => move(1)} disabled={index >= cards.length - 1}>Next card →</button></div></section>;
+  const card = cards[index];
+  if (!card) return <p className="nlm-artifact-empty">No source-backed flashcards could be created.</p>;
+  return <div className="nlm-flashcards"><button type="button" className={`nlm-flashcard ${revealed ? "revealed" : ""}`} onClick={() => setRevealed((value) => !value)}><span>{revealed ? "SOURCE-BACKED ANSWER" : card.tag || "RECALL"}</span><strong>{revealed ? card.back : card.front}</strong><small>Click to {revealed ? "hide" : "reveal"} the answer</small></button><CitationChips anchors={card.sourceAnchors || []} sourceIds={card.sourceIds || []} /><div className="nlm-artifact-nav"><button type="button" onClick={() => { setIndex((value) => Math.max(0, value - 1)); setRevealed(false); }} disabled={index === 0}>Previous</button><span>{index + 1} / {cards.length}</span><button type="button" onClick={() => { setIndex((value) => Math.min(cards.length - 1, value + 1)); setRevealed(false); }} disabled={index === cards.length - 1}>Next</button></div></div>;
 }
 
-function ImportantQuestions({ artifact }: { artifact: NotebookArtifact }) {
-  const questions = (artifact.payload.questions || []) as Array<any>;
-  if (!questions.length) return <section className="notebook-artifact-panel notebook-empty-artifact"><span className="notebook-eyebrow">EXAM PREP</span><h3>No source-grounded questions yet</h3><p>Add a clearer source section or a past question paper to build meaningful practice.</p></section>;
-  return <section className="notebook-artifact-panel"><div className="notebook-artifact-heading"><div><span className="notebook-eyebrow">GENERATED OUTPUT · SOURCE-GROUNDED PRACTICE</span><h3>{artifact.title}</h3><p className="notebook-artifact-subtitle">Every prompt names the idea, the situation, and what a strong answer must demonstrate.</p></div><span>{questions.length} prompts</span></div><div className="notebook-question-list notebook-question-list-rich">{questions.map((item, index) => <article key={item.id}><span>{String(index + 1).padStart(2, "0")}</span><div><small>{item.kind === "apply" ? "APPLY THE IDEA" : "EXPLAIN THE IDEA"}</small><strong>{item.question}</strong><details><summary>What a strong answer should contain</summary><p>{item.answerFocus || "Use the source definition, identify the relevant relationship, and justify your conclusion."}</p>{item.sourceAnchors?.length ? <small>Source anchor: {item.sourceAnchors[0]}</small> : null}</details></div></article>)}</div></section>;
+function QuestionsArtifact({ payload }: { payload: Record<string, any> }) {
+  const questions = payload.questions || [];
+  return <div className="nlm-question-list">{questions.map((question: any, index: number) => <article key={question.id || index}><span>{String(index + 1).padStart(2, "0")}</span><div><small>{question.kind === "apply" ? "APPLY" : "EXPLAIN"}</small><h3>{question.question}</h3><details><summary>What a strong answer should contain</summary><p>{question.answerFocus}</p></details><CitationChips anchors={question.sourceAnchors || []} sourceIds={question.sourceIds || []} /></div></article>)}</div>;
 }
 
-function MCQPractice({ artifact }: { artifact: NotebookArtifact }) {
-  const questions = (artifact.payload.questions || []) as Array<any>;
-  const [mcqIndex, setMcqIndex] = useState(0);
-  const [selected, setSelected] = useState<number | null>(null);
-  const question = questions[mcqIndex] || {};
-  const answered = selected !== null;
-  return <section className="notebook-artifact-panel"><div className="notebook-artifact-heading"><div><span className="notebook-eyebrow">GENERATED OUTPUT · TOPIC PRACTICE</span><h3>{artifact.title}</h3><p className="notebook-artifact-subtitle">Each question identifies its topic; the correct choice is anchored to the same source section.</p></div><span>{mcqIndex + 1} / {questions.length}</span></div><div className="notebook-mcq"><span className="notebook-practice-topic">TOPIC · {question.topicTitle || "Source section"}</span><h4>{question.question}</h4>{(question.options || []).map((option: string, index: number) => <button key={`${index}-${option}`} type="button" className={answered && index === question.answerIndex ? "correct" : answered && index === selected ? "incorrect" : ""} onClick={() => setSelected(index)}>{String.fromCharCode(65 + index)} <span>{option}</span></button>)}{answered ? <div className="notebook-mcq-feedback"><strong>{selected === question.answerIndex ? "Correct - keep going." : "Review this idea before moving on."}</strong><p>{question.explanation}</p>{question.sourceAnchors?.[0] ? <small>Source anchor: {question.sourceAnchors[0]}</small> : null}</div> : null}</div><div className="notebook-artifact-controls"><button type="button" onClick={() => { setSelected(null); setMcqIndex((index) => Math.max(0, index - 1)); }} disabled={mcqIndex === 0}>Previous question</button><button type="button" className="notebook-primary-button" onClick={() => { setSelected(null); setMcqIndex((index) => Math.min(questions.length - 1, index + 1)); }} disabled={!answered || mcqIndex >= questions.length - 1}>Next question</button></div></section>;
+function LessonArtifact({ payload }: { payload: Record<string, any> }) {
+  const slides = payload.slides || [];
+  const [index, setIndex] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const slide = slides[index];
+  useEffect(() => () => window.speechSynthesis?.cancel(), []);
+  if (!slide) return <p className="nlm-artifact-empty">This narrated lesson has no readable scenes.</p>;
+  function toggleNarration() {
+    if (!window.speechSynthesis) return;
+    if (playing) { window.speechSynthesis.cancel(); setPlaying(false); return; }
+    window.speechSynthesis.cancel();
+    const speech = new SpeechSynthesisUtterance(slide.narration || slide.body || slide.title);
+    speech.rate = 0.94;
+    speech.onend = () => setPlaying(false);
+    window.speechSynthesis.speak(speech); setPlaying(true);
+  }
+  return <div className="nlm-lesson"><div className="nlm-lesson-stage"><span className="nlm-kicker">SCENE {index + 1} · NARRATED LESSON</span><h2>{slide.title}</h2><p>{slide.body}</p>{slide.bullets?.length ? <ul>{slide.bullets.map((bullet: string) => <li key={bullet}>{bullet}</li>)}</ul> : null}<CitationChips anchors={slide.sourceAnchorIds || slide.sourceAnchors || []} sourceIds={payload.sourceIds || []} /></div><div className="nlm-artifact-nav"><button type="button" onClick={() => setIndex((value) => Math.max(0, value - 1))} disabled={index === 0}>Previous scene</button><button type="button" className="nlm-play" onClick={toggleNarration}><Icon name="audio" size={16} /> {playing ? "Pause narration" : "Play narration"}</button><button type="button" onClick={() => setIndex((value) => Math.min(slides.length - 1, value + 1))} disabled={index === slides.length - 1}>Next scene</button></div></div>;
 }
 
-function ArtifactPanel({ artifact, pack }: { artifact: NotebookArtifact; pack?: Notebook["knowledgePack"] }) {
-  const payload = artifact.payload;
-  const [slideIndex, setSlideIndex] = useState(0);
-  const [mcqIndex, setMcqIndex] = useState(0);
-  const [selected, setSelected] = useState<number | null>(null);
-  if (payload.kind === "slides") return <VisualSlidesModern artifact={artifact} pack={pack} />;
-  if (payload.kind === "openmaic_lesson") return <OpenMAICSpotlightLesson artifact={artifact} />;
-  if (payload.kind === "formula_sheet") return <FormulaSheet artifact={artifact} />;
-  if (payload.kind === "important_questions") return <ImportantQuestions artifact={artifact} />;
-  if (payload.kind === "flashcards") return <FlashcardDeck artifact={artifact} />;
-  if (payload.kind === "mcq" && !(payload.questions || []).length) return <section className="notebook-artifact-panel notebook-empty-artifact"><span className="notebook-eyebrow">MCQ PRACTICE</span><h3>No defensible MCQs yet</h3><p>Feynman only publishes a question when its answer can be supported by an extracted source section.</p></section>;
-  if (payload.kind === "mcq") return <MCQPractice artifact={artifact} />;
-  if (payload.kind === "slides") { const slides = payload.slides || []; const slide = slides[slideIndex] || {}; return <section className="notebook-artifact-panel"><div className="notebook-artifact-heading"><div><span className="notebook-eyebrow">GENERATED OUTPUT · SLIDE LESSON</span><h3>{artifact.title}</h3></div><span>{slideIndex + 1} / {slides.length}</span></div><div className="notebook-slide"><span className="notebook-slide-number">SLIDE {String(slideIndex + 1).padStart(2, "0")}</span><h4>{slide.title}</h4><p>{slide.body}</p><ul>{(slide.bullets || []).map((bullet: string) => <li key={bullet}>{bullet}</li>)}</ul><div className="notebook-visual-placeholder"><span>VISUAL LEARNING PROMPT</span><strong>{slide.visualHint}</strong><small>Source-linked visuals can be added to this slide without changing the source text.</small></div></div><div className="notebook-artifact-controls"><button type="button" onClick={() => setSlideIndex((index) => Math.max(0, index - 1))} disabled={slideIndex === 0}>← Previous</button><button type="button" onClick={() => setSlideIndex((index) => Math.min(slides.length - 1, index + 1))} disabled={slideIndex >= slides.length - 1}>Next slide →</button></div></section>; }
-  if (payload.kind === "mcq") { const questions = payload.questions || []; const question = questions[mcqIndex] || {}; const answered = selected !== null; return <section className="notebook-artifact-panel"><div className="notebook-artifact-heading"><div><span className="notebook-eyebrow">GENERATED OUTPUT · PRACTICE</span><h3>{artifact.title}</h3></div><span>{mcqIndex + 1} / {questions.length}</span></div><div className="notebook-mcq"><h4>{question.question}</h4>{(question.options || []).map((option: string, index: number) => <button key={option} type="button" className={answered && index === question.answerIndex ? "correct" : answered && index === selected ? "incorrect" : ""} onClick={() => setSelected(index)}>{String.fromCharCode(65 + index)} <span>{option}</span></button>)}{answered && <div className="notebook-mcq-feedback"><strong>{selected === question.answerIndex ? "Correct — keep going." : "Review this idea before moving on."}</strong><p>{question.explanation}</p></div>}</div><div className="notebook-artifact-controls"><button type="button" onClick={() => { setSelected(null); setMcqIndex((index) => Math.max(0, index - 1)); }} disabled={mcqIndex === 0}>← Previous</button><button type="button" onClick={() => { setSelected(null); setMcqIndex((index) => Math.min(questions.length - 1, index + 1)); }} disabled={!answered || mcqIndex >= questions.length - 1}>Next question →</button></div></section>; }
-  if (payload.kind === "formula_sheet") return <section className="notebook-artifact-panel"><div className="notebook-artifact-heading"><div><span className="notebook-eyebrow">GENERATED OUTPUT · QUICK REFERENCE</span><h3>{artifact.title}</h3></div><span>{(payload.formulas || []).length} formulas</span></div><div className="notebook-formula-list">{(payload.formulas || []).length ? payload.formulas.map((formula: any) => <article key={formula.formulaId}><strong>{formula.text}</strong><small>{formula.sourceId}{formula.page ? ` · page ${formula.page}` : ""}</small></article>) : <p>No equation-like lines were detected yet. Connect Mistral OCR for deeper scan and equation extraction.</p>}</div></section>;
-  if (payload.kind === "important_questions") return <section className="notebook-artifact-panel"><div className="notebook-artifact-heading"><div><span className="notebook-eyebrow">GENERATED OUTPUT · EXAM PREP</span><h3>{artifact.title}</h3></div><span>{(payload.questions || []).length} prompts</span></div><div className="notebook-question-list">{(payload.questions || []).map((item: any, index: number) => <article key={item.id}><span>{String(index + 1).padStart(2, "0")}</span><div><small>{item.kind}</small><strong>{item.question}</strong></div></article>)}</div></section>;
-  if (payload.kind === "flashcards") return <section className="notebook-artifact-panel"><div className="notebook-artifact-heading"><div><span className="notebook-eyebrow">GENERATED OUTPUT · RETRIEVAL</span><h3>{artifact.title}</h3></div><span>{(payload.cards || []).length} cards</span></div><div className="notebook-card-list">{(payload.cards || []).map((card: any) => <details key={card.front}><summary>{card.front}</summary><p>{card.back}</p></details>)}</div></section>;
-  return <section className="notebook-artifact-panel"><div className="notebook-artifact-heading"><div><span className="notebook-eyebrow">GENERATED OUTPUT · ORIENTATION</span><h3>{artifact.title}</h3></div><span>{(payload.sections || []).length} sections</span></div><div className="notebook-summary-list">{(payload.sections || []).map((section: any) => <article key={section.title}><strong>{section.title}</strong><p>{section.summary}</p></article>)}</div></section>;
+function NotesCanvas({ notes, draft, editing, busy, onDraft, onSave, onNew, onOpen, onDelete }: { notes: NotebookNote[]; draft: { title: string; content: string; sourceIds: string[]; sourceAnchorIds: string[] }; editing: NotebookNote | null; busy: boolean; onDraft: (value: { title: string; content: string; sourceIds: string[]; sourceAnchorIds: string[] }) => void; onSave: () => void; onNew: () => void; onOpen: (note: NotebookNote) => void; onDelete: (note: NotebookNote) => void }) {
+  return <div className="nlm-notes-canvas"><aside><div><span className="nlm-kicker">YOUR NOTES</span><button type="button" onClick={onNew}><Icon name="add" size={15} /> New note</button></div><div className="nlm-note-list">{notes.length ? notes.map((note) => <article className={editing?.noteId === note.noteId ? "active" : ""} key={note.noteId}><button type="button" onClick={() => onOpen(note)}><strong>{note.title}</strong><small>{shortDate(note.updatedAt)} · {note.sourceIds.length ? `${note.sourceIds.length} sources` : "personal"}</small></button><button type="button" aria-label={`Delete ${note.title}`} onClick={() => onDelete(note)}><Icon name="delete" size={14} /></button></article>) : <p>No saved notes yet.</p>}</div></aside><section><span className="nlm-kicker">{editing ? "EDIT NOTE" : "NEW NOTE"}</span><input value={draft.title} onChange={(event) => onDraft({ ...draft, title: event.target.value })} placeholder="Note title" maxLength={240} /><textarea value={draft.content} onChange={(event) => onDraft({ ...draft, content: event.target.value })} placeholder="Write what you want to remember…" rows={12} maxLength={12000} /><div className="nlm-note-footer"><CitationChips anchors={draft.sourceAnchorIds} sourceIds={draft.sourceIds} /><button type="button" onClick={onSave} disabled={!draft.content.trim() || busy}>{busy ? "Saving…" : editing ? "Save changes" : "Save note"}</button></div></section></div>;
 }

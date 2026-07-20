@@ -1,0 +1,21 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+
+const workspace = readFileSync(fileURLToPath(new URL("./NotebookWorkspace.tsx", import.meta.url)), "utf8");
+
+describe("Notebook notes source scope", () => {
+  it("initializes notes opened from the header and saved-output count with the active source selection", () => {
+    expect(workspace).toContain('className="nlm-top-quiet" onClick={() => openNewNote()}');
+    expect(workspace).toContain('onClick={() => openNewNote()}>Notes {notes.length}</button>');
+  });
+
+  it("makes the proof task the primary source desk view", () => {
+    expect(workspace).toContain('useState<CenterView>("proof")');
+    expect(workspace).toContain("Turn this source into demonstrated understanding.");
+    expect(workspace).toContain("learningOsApi.submitAttempt");
+    expect(workspace).toContain("SOURCE → PROOF → EVIDENCE");
+    expect(workspace).toContain("sourceNotebook=");
+    expect(workspace).toContain("values.indexOf(item) === index");
+  });
+});

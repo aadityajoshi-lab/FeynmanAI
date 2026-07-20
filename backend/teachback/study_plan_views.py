@@ -15,8 +15,8 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .providers import CHAT_ACTION_TYPES, LEARNING_MODE_IDS, ModuleChatRequest, ProviderOutputError, ProviderUnavailable, StudyPlanRequest, normalize_checkpoint_feedback, provider_for
-from .models import StudySource
+from .providers import CHAT_ACTION_TYPES, LEARNING_MODE_IDS, ModuleChatRequest, ProviderOutputError, ProviderUnavailable, StudyPlanRequest, normalize_checkpoint_feedback, provider_for, provider_runtime_status
+from .models import NotebookSource, StudySource
 
 
 def _error(message: str, code: str = "invalid_request", http_status: int = 422):
@@ -422,11 +422,50 @@ class ProviderStatusView(APIView):
     """Expose provider availability without exposing credentials."""
 
     def get(self, request):
+        def provider_entry(*, provider_id: str, label: str, configured: bool, model: str, runtime_id: str | None = None) -> dict:
+            runtime = provider_runtime_status(runtime_id or provider_id) if runtime_id else {"lastSuccessAt": None, "lastErrorCategory": None}
+            last_error = runtime.get("lastErrorCategory")
+            last_success = runtime.get("lastSuccessAt")
+            unavailable_categories = {"unavailable", "timeout", "authentication", "rate_limited", "provider_unavailable"}
+            if not configured:
+                provider_status = "credentials_missing"
+                reachable = False
+            elif last_error in unavailable_categories:
+                provider_status = "configured_but_unavailable"
+                reachable = False
+            elif last_success:
+                provider_status = "configured_and_reachable"
+                reachable = True
+            else:
+                provider_status = "configured_unverified"
+                reachable = None
+            return {
+                # Keep the legacy fields for existing intake clients.
+                "id": provider_id,
+                "label": label,
+                "available": bool(configured and provider_status != "configured_but_unavailable"),
+                "model": model,
+                # Typed, non-secret operational state for the Learning OS.
+                "configured": bool(configured),
+                "reachable": reachable,
+                "status": provider_status,
+                "lastErrorCategory": last_error,
+                "lastSuccessAt": last_success,
+            }
+
+        source_status = {
+            "ready": NotebookSource.objects.filter(status="ready").count(),
+            "extracting": NotebookSource.objects.filter(status="extracting").count(),
+            "failed": NotebookSource.objects.filter(status="failed").count(),
+            "localFallbackActive": NotebookSource.objects.filter(extraction_method="local-fallback-after-mistral-network-error").count(),
+        }
         return Response({
             "providers": [
-                {"id": "fireworks", "label": "Qwen3 P7 Plus / Fireworks", "available": bool(settings.FIREWORKS_API_KEY), "model": settings.FIREWORKS_MODEL},
-                {"id": "openai", "label": "OpenAI", "available": bool(settings.OPENAI_API_KEY), "model": settings.OPENAI_MODEL},
-                {"id": "fixture", "label": "Local fixture", "available": True, "model": "fixture-v1"},
+                provider_entry(provider_id="mistral", label="Mistral OCR", configured=bool(settings.MISTRAL_API_KEY), model=settings.MISTRAL_OCR_MODEL, runtime_id="mistral"),
+                provider_entry(provider_id="fireworks", label="Fireworks", configured=bool(settings.FIREWORKS_API_KEY), model=settings.FIREWORKS_MODEL, runtime_id="fireworks"),
+                provider_entry(provider_id="openai", label="OpenAI", configured=bool(settings.OPENAI_API_KEY), model=settings.OPENAI_MODEL),
+                {"id": "fixture", "label": "Local fixture", "available": True, "model": "fixture-v1", "configured": True, "reachable": True, "status": "local_fallback_active", "lastErrorCategory": None, "lastSuccessAt": None},
             ],
             "defaultProvider": settings.LLM_PROVIDER,
+            "sourceStatus": source_status,
         })

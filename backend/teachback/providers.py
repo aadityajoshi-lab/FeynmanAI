@@ -2,7 +2,9 @@
 from __future__ import annotations
 import json
 import re
+from datetime import datetime, timezone
 from dataclasses import dataclass, field
+from threading import Lock
 from typing import Any
 from django.conf import settings
 
@@ -21,6 +23,37 @@ class ProviderOutputError(ValueError):
     pass
 
 
+_PROVIDER_RUNTIME_LOCK = Lock()
+_PROVIDER_RUNTIME: dict[str, dict[str, str | None]] = {
+    "fireworks": {"lastSuccessAt": None, "lastErrorCategory": None},
+    "mistral": {"lastSuccessAt": None, "lastErrorCategory": None},
+}
+
+
+def record_provider_success(provider_id: str) -> None:
+    """Persist only safe in-process health metadata, never request details."""
+    with _PROVIDER_RUNTIME_LOCK:
+        current = _PROVIDER_RUNTIME.setdefault(provider_id, {"lastSuccessAt": None, "lastErrorCategory": None})
+        current["lastSuccessAt"] = datetime.now(timezone.utc).isoformat()
+        current["lastErrorCategory"] = None
+
+
+def record_provider_failure(provider_id: str, category: str) -> None:
+    """Record a normalized provider failure category without error text."""
+    with _PROVIDER_RUNTIME_LOCK:
+        current = _PROVIDER_RUNTIME.setdefault(provider_id, {"lastSuccessAt": None, "lastErrorCategory": None})
+        current["lastErrorCategory"] = str(category or "provider_error")[:64]
+
+
+def provider_runtime_status(provider_id: str) -> dict[str, str | None]:
+    with _PROVIDER_RUNTIME_LOCK:
+        value = _PROVIDER_RUNTIME.get(provider_id, {})
+        return {
+            "lastSuccessAt": value.get("lastSuccessAt"),
+            "lastErrorCategory": value.get("lastErrorCategory"),
+        }
+
+
 MAX_PROVIDER_INTEGER_DIGITS = 256
 
 
@@ -35,6 +68,39 @@ def _bounded_provider_int(raw: str) -> int | str:
 def load_provider_json(raw: str) -> dict:
     """Parse provider JSON without allowing unbounded integer conversion."""
     return json.loads(raw, strict=False, parse_int=_bounded_provider_int)
+
+
+def _require_top_level_fields(payload: object, schema: dict) -> dict:
+    """Reject syntactically valid provider JSON that omitted its contract."""
+    if not isinstance(payload, dict):
+        raise ProviderOutputError("Fireworks returned a non-object structured response")
+    required = [str(field) for field in schema.get("required", []) if str(field)]
+    missing = [field for field in required if field not in payload]
+    if missing:
+        raise ProviderOutputError(
+            "Fireworks omitted required structured fields: " + ", ".join(missing[:8])
+        )
+    return payload
+
+
+def _fireworks_json_schema_format(schema_name: str, schema: dict) -> dict:
+    """Create Fireworks' OpenAI-compatible schema response format."""
+    safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", schema_name)[:64] or "feynman_response"
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": safe_name,
+            "schema": schema,
+        },
+    }
+
+
+def _is_schema_format_rejection(exc: Exception) -> bool:
+    """Whether one legacy Fireworks model rejected only the schema envelope."""
+    if getattr(exc, "status_code", None) not in {400, 422}:
+        return False
+    detail = str(exc).lower()
+    return any(marker in detail for marker in ("json_schema", "response_format", "structured output", "schema"))
 
 
 @dataclass
@@ -792,6 +858,23 @@ class LLMProvider:
     def generate_study_plan(self, request: StudyPlanRequest) -> dict:
         raise NotImplementedError
 
+    def generate_notebook_artifact(self, request: dict) -> dict:
+        """Generate one source-bounded notebook artifact.
+
+        This is intentionally separate from study-plan generation: notebook
+        artifacts receive only the selected ready-source pack, never a
+        learner's global memory or unrelated notebook material.
+        """
+        raise NotImplementedError
+
+    def generate_openmaic_lesson(self, request: dict) -> dict:
+        """Generate a narrated notebook lesson from a bounded source pack."""
+        raise NotImplementedError
+
+    def compile_curriculum(self, request: dict) -> dict:
+        """Propose a strictly source-cited curriculum graph."""
+        raise NotImplementedError
+
 
 def _contains(text: str, *terms: str) -> bool:
     lowered = text.lower()
@@ -1192,6 +1275,126 @@ class OpenAIProvider(LLMProvider):
         return result
 
 
+def _notebook_artifact_schema(artifact_type: str, allowed_anchors: list[str]) -> dict:
+    """Return the compact, typed Fireworks contract for one notebook output.
+
+    The server owns source IDs and validates every returned anchor again after
+    parsing.  Keeping the model contract per artifact type avoids asking it to
+    invent a generic blob that the browser then has to interpret.
+    """
+    anchor_ids = [str(item) for item in allowed_anchors if str(item)]
+    anchor_field = {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 4,
+        "items": {"type": "string", "enum": anchor_ids},
+    }
+    text = {"type": "string", "minLength": 3, "maxLength": 1400}
+    short_text = {"type": "string", "minLength": 3, "maxLength": 240}
+    top = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["title"],
+        "properties": {"title": {"type": "string", "minLength": 3, "maxLength": 240}},
+    }
+    if artifact_type == "summary":
+        top["required"].append("sections")
+        top["properties"]["sections"] = {
+            "type": "array", "minItems": 1, "maxItems": 24,
+            "items": {"type": "object", "additionalProperties": False, "required": ["title", "summary", "sourceAnchorIds"], "properties": {
+                "title": short_text, "summary": text, "sourceAnchorIds": anchor_field,
+            }},
+        }
+    elif artifact_type == "mcq":
+        top["required"].append("questions")
+        top["properties"]["questions"] = {
+            "type": "array", "minItems": 1, "maxItems": 30,
+            "items": {"type": "object", "additionalProperties": False, "required": ["question", "options", "answerIndex", "explanation", "sourceAnchorIds"], "properties": {
+                "topicTitle": short_text,
+                "question": {"type": "string", "minLength": 12, "maxLength": 520},
+                "options": {"type": "array", "minItems": 3, "maxItems": 4, "items": {"type": "string", "minLength": 1, "maxLength": 320}},
+                "answerIndex": {"type": "integer", "minimum": 0, "maximum": 3},
+                "explanation": text,
+                "sourceAnchorIds": anchor_field,
+            }},
+        }
+    elif artifact_type == "slides":
+        top["required"].append("slides")
+        top["properties"]["slides"] = {
+            "type": "array", "minItems": 1, "maxItems": 24,
+            "items": {"type": "object", "additionalProperties": False, "required": ["title", "body", "bullets", "sourceAnchorIds"], "properties": {
+                "title": short_text,
+                "slideLabel": {"type": "string", "maxLength": 40},
+                "body": text,
+                "bullets": {"type": "array", "minItems": 1, "maxItems": 5, "items": {"type": "string", "minLength": 2, "maxLength": 240}},
+                "teachingNote": {"type": "string", "maxLength": 240},
+                "visualKind": {"type": "string", "enum": ["text-note", "source-figure", "teaching-diagram"]},
+                "assetIds": {"type": "array", "maxItems": 3, "items": {"type": "string"}},
+                "diagram": {"type": "object"},
+                "sourceAnchorIds": anchor_field,
+            }},
+        }
+    elif artifact_type == "flashcards":
+        top["required"].append("cards")
+        top["properties"]["cards"] = {
+            "type": "array", "minItems": 1, "maxItems": 80,
+            "items": {"type": "object", "additionalProperties": False, "required": ["front", "back", "sourceAnchorIds"], "properties": {
+                "front": {"type": "string", "minLength": 4, "maxLength": 500},
+                "back": text,
+                "tag": {"type": "string", "maxLength": 80},
+                "sourceAnchorIds": anchor_field,
+            }},
+        }
+    elif artifact_type == "important_questions":
+        top["required"].append("questions")
+        top["properties"]["questions"] = {
+            "type": "array", "minItems": 1, "maxItems": 60,
+            "items": {"type": "object", "additionalProperties": False, "required": ["kind", "question", "answerFocus", "sourceAnchorIds"], "properties": {
+                "kind": {"type": "string", "enum": ["explain", "apply"]},
+                "question": {"type": "string", "minLength": 12, "maxLength": 600},
+                "answerFocus": text,
+                "sourceAnchorIds": anchor_field,
+            }},
+        }
+    elif artifact_type == "mind_map":
+        top["required"].extend(["rootLabel", "nodes", "edges"])
+        top["properties"].update({
+            "rootLabel": short_text,
+            "nodes": {"type": "array", "minItems": 1, "maxItems": 30, "items": {"type": "object", "additionalProperties": False, "required": ["id", "label", "detail", "sourceAnchorIds"], "properties": {
+                "id": {"type": "string", "minLength": 1, "maxLength": 80}, "label": short_text, "detail": text, "sourceAnchorIds": anchor_field,
+            }}},
+            "edges": {"type": "array", "maxItems": 60, "items": {"type": "object", "additionalProperties": False, "required": ["from", "to"], "properties": {
+                "from": {"type": "string", "minLength": 1, "maxLength": 80}, "to": {"type": "string", "minLength": 1, "maxLength": 80},
+            }}},
+        })
+    elif artifact_type == "data_table":
+        top["required"].append("rows")
+        top["properties"]["rows"] = {
+            "type": "array", "minItems": 1, "maxItems": 60,
+            "items": {"type": "object", "additionalProperties": False, "required": ["topic", "keyIdea", "formulas", "sourceAnchorIds"], "properties": {
+                "topic": short_text,
+                "keyIdea": text,
+                "formulas": {"type": "array", "maxItems": 4, "items": {"type": "string", "maxLength": 400}},
+                "sourceAnchorIds": anchor_field,
+            }},
+        }
+    elif artifact_type == "formula_sheet":
+        top["required"].append("formulas")
+        top["properties"]["formulas"] = {
+            # Some valid source packs contain no literal equations. Allow an
+            # honest empty output instead of pressuring the model to invent one.
+            "type": "array", "minItems": 0, "maxItems": 60,
+            "items": {"type": "object", "additionalProperties": False, "required": ["text", "sourceAnchorIds"], "properties": {
+                "text": {"type": "string", "minLength": 3, "maxLength": 600},
+                "label": short_text,
+                "sourceAnchorIds": anchor_field,
+            }},
+        }
+    else:
+        raise ProviderOutputError("unsupported notebook artifact type")
+    return top
+
+
 class FireworksProvider(LLMProvider):
     """OpenAI-compatible Fireworks provider for real module generation."""
 
@@ -1318,10 +1521,10 @@ class FireworksProvider(LLMProvider):
 
     def _chat_json(self, instruction: str, schema_name: str, schema: dict, *, attachment: dict | None = None) -> dict:
         last_error: Exception | None = None
-        # Qwen3 P7 Plus reliably follows JSON mode, but a verbatim nested
-        # manifest schema can cause it to emit an empty object. Give it the
-        # required field shape in a compact form and keep the complete schema
-        # enforcement in the normalizers and API validators below.
+        # Keep a compact human-readable shape in the prompt as a helpful
+        # fallback for legacy model aliases. The API schema below is the
+        # primary contract: plain json_object mode allowed Qwen to return a
+        # valid-but-empty object after spending its tokens on reasoning.
         def schema_shape(value: object, depth: int = 0) -> object:
             if depth > 4 or not isinstance(value, dict):
                 return "object"
@@ -1350,6 +1553,8 @@ class FireworksProvider(LLMProvider):
             if schema_name.startswith("study_")
             else f"matching this required field shape ({schema_name}): {compact_shape}."
         )
+        response_format = _fireworks_json_schema_format(schema_name, schema)
+        fell_back_to_json_object = False
         for attempt in range(2):
             try:
                 user_content: str | list[dict] = instruction
@@ -1386,18 +1591,11 @@ class FireworksProvider(LLMProvider):
                     messages=[
                         {
                             "role": "system",
-                            # Qwen3 P7 Plus accepts JSON-object mode but does
-                            # not accept the OpenAI strict json_schema payload.
-                            # Keep the contract in the prompt as well; the
-                            # server-side validators remain authoritative.
                             "content": system_content,
                         },
                         {"role": "user", "content": user_content},
                     ],
-                    # Fireworks/Qwen rejects response_format.type=json_schema
-                    # with HTTP 400. json_object is supported and is still
-                    # constrained by the schema prompt plus our validators.
-                    response_format={"type": "json_object"},
+                    response_format=response_format,
                 )
                 message = response.choices[0].message.content if response.choices else ""
                 if isinstance(message, list):
@@ -1407,8 +1605,11 @@ class FireworksProvider(LLMProvider):
                 # Qwen occasionally emits literal newlines inside long string
                 # fields despite JSON-schema mode. Permit control characters;
                 # the typed manifest and source validators remain authoritative.
-                return load_provider_json(message)
+                parsed = _require_top_level_fields(load_provider_json(message), schema)
+                record_provider_success("fireworks")
+                return parsed
             except ProviderOutputError:
+                record_provider_failure("fireworks", "model_response_invalid")
                 raise
             except json.JSONDecodeError as exc:
                 try:
@@ -1416,6 +1617,8 @@ class FireworksProvider(LLMProvider):
                     repaired = repair_json(message, return_objects=True)
                     is_manifest = schema_name.startswith("study_manifest")
                     if isinstance(repaired, dict) and repaired and (not is_manifest or isinstance(repaired.get("scenes"), list)):
+                        repaired = _require_top_level_fields(repaired, schema)
+                        record_provider_success("fireworks")
                         return repaired
                 except Exception:
                     pass
@@ -1423,6 +1626,14 @@ class FireworksProvider(LLMProvider):
                 if attempt == 0:
                     continue
             except Exception as exc:
+                # Older Fireworks model aliases may reject the schema envelope
+                # itself. Fall back once to JSON object mode, while retaining
+                # the top-level contract check so an empty {} never succeeds.
+                if not fell_back_to_json_object and _is_schema_format_rejection(exc):
+                    response_format = {"type": "json_object"}
+                    fell_back_to_json_object = True
+                    last_error = exc
+                    continue
                 # Preserve the provider's safe diagnostic (status and request
                 # detail when supplied) so the API does not turn a model
                 # incompatibility, timeout, or rejected payload into the
@@ -1430,7 +1641,9 @@ class FireworksProvider(LLMProvider):
                 # include credentials in this exception; the OpenAI-compatible
                 # SDK does not include authorization headers in its messages.
                 detail = str(exc).strip() or exc.__class__.__name__
+                record_provider_failure("fireworks", "unavailable")
                 raise ProviderUnavailable(f"Fireworks request failed: {detail}") from exc
+        record_provider_failure("fireworks", "model_response_invalid")
         raise ProviderUnavailable(f"Fireworks returned malformed structured output after retry: {last_error}") from last_error
 
     def generate_study_plan(self, request: StudyPlanRequest) -> dict:
@@ -1922,6 +2135,78 @@ class FireworksProvider(LLMProvider):
         result["providerMode"] = self.mode
         return result
 
+    def compile_curriculum(self, request: dict) -> dict:
+        spans = request.get("sourceSpans") if isinstance(request.get("sourceSpans"), list) else []
+        allowed_anchors = [str(span.get("sourceAnchorId")) for span in spans if isinstance(span, dict) and span.get("sourceAnchorId")]
+        anchor_enum = allowed_anchors or ["unavailable"]
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["schemaVersion", "domain", "learnerLevel", "concepts", "prerequisites", "activities", "uncertainty"],
+            "properties": {
+                "schemaVersion": {"type": "string"},
+                "domain": {"type": "string", "minLength": 1, "maxLength": 120},
+                "learnerLevel": {"type": "string", "enum": ["beginner", "intermediate", "advanced"]},
+                "concepts": {"type": "array", "minItems": 2, "maxItems": 12, "items": {"type": "object", "additionalProperties": False, "required": ["key", "title", "description", "sourceIds", "sourceAnchorIds", "uncertainty"], "properties": {"key": {"type": "string", "maxLength": 160}, "title": {"type": "string", "maxLength": 240}, "description": {"type": "string", "maxLength": 4000}, "sourceIds": {"type": "array", "items": {"type": "string"}}, "sourceAnchorIds": {"type": "array", "minItems": 1, "items": {"type": "string", "enum": anchor_enum}}, "uncertainty": {"type": "object"}}}},
+                "prerequisites": {"type": "array", "maxItems": 30, "items": {"type": "object", "additionalProperties": False, "required": ["prerequisite", "dependent", "sourceAnchorIds"], "properties": {"prerequisite": {"type": "string"}, "dependent": {"type": "string"}, "sourceAnchorIds": {"type": "array", "items": {"type": "string", "enum": anchor_enum}}}}},
+                "activities": {"type": "array", "minItems": 4, "maxItems": 20, "items": {"type": "object", "additionalProperties": False, "required": ["activityType", "conceptKey", "title", "prompt", "difficulty", "expectedObservations", "evaluatorRubric", "sourceIds", "sourceAnchorIds", "remediationTarget", "transferTarget"], "properties": {"activityType": {"type": "string"}, "conceptKey": {"type": "string"}, "title": {"type": "string", "maxLength": 240}, "prompt": {"type": "string", "maxLength": 4000}, "difficulty": {"type": "integer", "minimum": 1, "maximum": 5}, "expectedObservations": {"type": "array", "items": {"type": "string"}}, "evaluatorRubric": {"type": "array", "items": {"type": "string"}}, "sourceIds": {"type": "array", "items": {"type": "string"}}, "sourceAnchorIds": {"type": "array", "minItems": 1, "items": {"type": "string", "enum": anchor_enum}}, "remediationTarget": {"type": "string", "maxLength": 1000}, "transferTarget": {"type": "string", "maxLength": 1000}}}},
+                "uncertainty": {"type": "object"},
+            },
+        }
+        instruction = (
+            "Compile a coherent observable curriculum from only the supplied source spans. "
+            "Every concept and activity must cite one or more exact sourceAnchorIds from the supplied spans. "
+            "Do not invent facts, citations, or unsupported relationships. Use a generic source-grounded route when the domain is unfamiliar. "
+            f"Goal: {request.get('goal')}; learner level: {request.get('learnerLevel')}; source spans: {spans}. "
+            "Return concepts, prerequisite edges, and activities that require prediction, explanation, comparison, application, debugging, bounded analysis, or transfer."
+        )
+        result = self._chat_json(instruction, "curriculum_v1", schema)
+        result["providerMode"] = self.mode
+        return result
+
+    def generate_notebook_artifact(self, request: dict) -> dict:
+        """Generate one typed artifact from the caller's selected source pack.
+
+        ``sourceIds`` remain server-owned. The model sees locator-rich source
+        records and may return only anchors from the supplied allow-list; the
+        notebook layer validates and binds those anchors to durable sources
+        before persisting anything.
+        """
+        artifact_type = str(request.get("artifactType") or "").strip().lower()
+        allowed_anchors = [str(item) for item in request.get("allowedAnchorIds") or [] if str(item)]
+        if not allowed_anchors:
+            raise ProviderOutputError("A source-grounded artifact requires approved source anchors")
+        schema = _notebook_artifact_schema(artifact_type, allowed_anchors)
+        artifact_labels = {
+            "summary": "concise study guide",
+            "mcq": "multiple-choice retrieval practice",
+            "slides": "teaching slide deck",
+            "formula_sheet": "formula sheet",
+            "important_questions": "important explanation and application questions",
+            "flashcards": "retrieval flashcards",
+            "mind_map": "concept mind map",
+            "data_table": "source-grounded study data table",
+        }
+        instruction = (
+            "You are generating one notebook study artifact from a bounded set of learner-selected, ready sources. "
+            f"Create a {artifact_labels.get(artifact_type, artifact_type)}. "
+            "Use only the supplied source records. Every learner-facing factual item MUST include one or more exact approved sourceAnchorIds. "
+            "If the supplied evidence cannot support an item, omit that item instead of guessing. "
+            "Never invent a source ID, page, block, quote, formula, answer, citation, or factual claim. "
+            "Do not return sourceIds: the server will derive them from validated anchors. "
+            "For MCQs, include a valid zero-based answerIndex and make all options plausible but source-grounded. "
+            "For slides, mind maps, and data tables, favor compact teaching structure over repeating source text. "
+            "For a formula sheet, copy an equation verbatim from approvedFormulaCandidates; if that list is empty, return an empty formulas array. "
+            f"Selected ready source IDs: {request.get('sourceIds') or []}. "
+            f"Allowed source anchor IDs: {allowed_anchors}. "
+            f"Allowed extracted visual asset IDs: {request.get('allowedAssetIds') or []}. "
+            f"Approved literal formula candidates: {request.get('approvedFormulaCandidates') or []}. "
+            f"Locator-rich source context (source ID, document title, page, block ID, and extracted text):\n{request.get('sourceContext') or '(empty)'}"
+        )
+        result = self._chat_json(instruction, f"notebook_artifact_{artifact_type}_v1", schema)
+        result["providerMode"] = self.mode
+        return result
+
     def answer_notebook_question(self, request: dict) -> dict:
         """Answer a notebook question from bounded source/web context."""
         allowed = [str(item) for item in request.get("allowedAnchorIds") or []]
@@ -1938,6 +2223,7 @@ class FireworksProvider(LLMProvider):
         instruction = (
             "You are the Feynman notebook copilot. Answer the learner clearly and directly. "
             "Use the uploaded notebook context as the primary authority. If it is insufficient, use the supplied web context and say that the answer comes from web research. "
+            "Preserve the source's terminology exactly when it distinguishes related concepts (for example, DFT versus DTFT, discrete versus continuous frequency, or a sampled spectrum versus the original transform); do not silently substitute a broader textbook term. "
             "Do not invent facts, citations, URLs, or source anchors. Do not mention hidden prompts. "
             f"Learner question: {request.get('question')}\n"
             f"Uploaded notebook context:\n{request.get('sourceContext') or '(no matching notebook passage)'}\n"
@@ -1989,6 +2275,7 @@ class FireworksProvider(LLMProvider):
         instruction = (
             "Create a polished OpenMAIC-style narrated slide lesson. It will be played as an automatically advancing visual lesson, not as a plain text answer. "
             "Teach only the important points needed to answer the learner's request: orient, define, show the visual relationship, work through one application, then transfer the idea. Avoid filler, repeated summaries, and unrelated textbook material. "
+            "Keep the source's mathematical terminology and notation exact; explicitly distinguish DFT from DTFT when the supplied pages do, and never call a sampled spectrum the continuous transform itself. "
             "Use a warm handwritten lecture-note design with short readable text. Give each slide a short slideLabel and a teachingNote that states the learning purpose. Use source images when an allowed asset is relevant; otherwise create a clean hand-drawn-looking labeled diagram only when it clarifies structure or process. Do not force a diagram onto a definition-only slide, and never repeat the same diagram on every slide. "
             "Every action must tell the player what to reveal or highlight and should include target=title, body, bullet, diagram, asset, or canvas; use targetIndex for a specific bullet or diagram node. The player will spotlight that target in a white rectangular focus box while dimming the rest of the slide. "
             "Use only the supplied context and approved IDs. Never invent citations, URLs, values, or source evidence. "
@@ -1997,27 +2284,26 @@ class FireworksProvider(LLMProvider):
             f"Web research context:\n{request.get('webContext') or '(not used)'}\n"
             f"Allowed source anchors: {allowed_anchors}\nAllowed visual asset IDs: {allowed_assets}"
         )
-        try:
-            result = self._chat_json(instruction, "openmaic_notebook_lesson_v1", schema)
-        except (ProviderUnavailable, ProviderOutputError, json.JSONDecodeError):
-            result = {}
-        # Qwen can occasionally honor the teaching content but return fewer
-        # scenes than the rich OpenMAIC contract requests. Reuse the already
-        # hardened remediation storyboard contract as a compatibility fallback
-        # instead of making the learner retry a whole lesson generation.
-        if not isinstance(result.get("slides"), list) or len(result.get("slides") or []) < 4:
-            result = self.generate_remediation_slides({
-                "topicTitle": request.get("question"),
-                "stageKind": "notebook_question",
-                "mistake": "The learner requested a guided explanation.",
-                "correctAnswer": "Teach the requested idea from the supplied context.",
-                "correction": "Connect the definition, visual relationship, application, and transfer check.",
-                "remediation": "Keep the lesson source-grounded and readable.",
-                "sourceContext": request.get("sourceContext"),
-                "approvedAnchorIds": allowed_anchors,
-            })
+        result = self._chat_json(instruction, "openmaic_notebook_lesson_v1", schema)
+        # A structured response that cannot produce a complete lesson is a
+        # provider failure, not permission to substitute a local slide deck and
+        # label it as Fireworks. The API returns a recoverable error so the
+        # learner can retry the configured provider explicitly.
+        if not isinstance(result.get("slides"), list) or not 4 <= len(result["slides"]) <= 8:
+            raise ProviderOutputError("Fireworks returned an incomplete narrated lesson")
         result["providerMode"] = self.mode
         return result
+
+
+def fireworks_generation_configured() -> bool:
+    """Whether notebook generation is explicitly configured to use Fireworks.
+
+    A key alone is not enough to override the deterministic fixture mode used
+    by tests and local development. Production must opt in with both a server-
+    side key and ``LLM_PROVIDER=fireworks`` (or its live aliases).
+    """
+    configured = str(getattr(settings, "LLM_PROVIDER", "") or "").strip().casefold()
+    return bool(getattr(settings, "FIREWORKS_API_KEY", "")) and configured in {"fireworks", "live_fireworks", "qwen"}
 
 
 def provider_for(mode: str | None = None) -> LLMProvider:

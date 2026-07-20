@@ -1,0 +1,286 @@
+/* Active Learning OS Source Desk: neutralize the legacy notebook skin. */
+.nlm-shell {
+  --nw-ink: #111;
+  --nw-muted: #666;
+  --nw-line: #e5e5e5;
+  --nw-paper: #fafafa;
+  --nw-panel: #fff;
+  --nw-blue: #111;
+  --nw-shadow: none;
+  min-height: 100vh;
+  color: #111 !important;
+  background: #fafafa !important;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif !important;
+}
+
+.nlm-shell *,
+.nlm-shell *::before,
+.nlm-shell *::after {
+  box-shadow: none !important;
+  background-image: none !important;
+}
+
+.nlm-shell [class^="nlm-"],
+.nlm-shell [class*=" nlm-"] {
+  border-color: #e5e5e5 !important;
+  color: #111 !important;
+  background-color: #fff !important;
+  font-family: inherit !important;
+}
+
+.nlm-shell button,
+.nlm-shell input,
+.nlm-shell textarea {
+  border-color: #e5e5e5 !important;
+  color: #111 !important;
+  background-color: #fff !important;
+  font-family: inherit !important;
+}
+
+.nlm-shell .nlm-topbar,
+.nlm-shell .nlm-panel,
+.nlm-shell .nlm-chat-canvas,
+.nlm-shell .nlm-chat-scroll,
+.nlm-shell .nlm-studio-body,
+.nlm-shell .nlm-sources-body {
+  background: #fff !important;
+}
+
+.nlm-shell .nlm-create-button,
+.nlm-shell .nlm-welcome-orb,
+.nlm-shell .nlm-message-avatar,
+.nlm-shell .nlm-saved-icon,
+.nlm-shell .nlm-play {
+  border-color: #111 !important;
+  color: #fff !important;
+  background: #111 !important;
+}
+
+.nlm-shell .nlm-message.user .nlm-message-avatar,
+.nlm-shell .nlm-source-file,
+.nlm-shell .nlm-studio-icon,
+.nlm-shell .nlm-empty-sources > span,
+.nlm-shell .nlm-icon-button {
+  color: #111 !important;
+  background: #f1f1f1 !important;
+}
+
+.nlm-shell .nlm-source-row.selected,
+.nlm-shell .nlm-center-tabs button.active,
+.nlm-shell .nlm-prompt-grid button:hover,
+.nlm-shell .nlm-studio-card:hover,
+.nlm-shell .nlm-studio-card:focus-visible {
+  border-color: #111 !important;
+  background: #f1f1f1 !important;
+}
+
+.nlm-shell .nlm-source-row.view-only {
+  opacity: .7;
+}
+
+.nlm-shell .nlm-source-row fieldset {
+  min-width: 0;
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  border: 0 !important;
+}
+
+.nlm-shell .nlm-source-row.view-only .nlm-source-copy small::after {
+  content: " View-only; excluded from grounded answers.";
+}
+
+.nlm-shell .nlm-error,
+.nlm-shell .nlm-error * {
+  border-color: #7f1d1d !important;
+  color: #7f1d1d !important;
+  background: #fff !important;
+}
+
+.nlm-shell .nlm-source-delete:hover,
+.nlm-shell .nlm-stale-note {
+  color: #7f1d1d !important;
+  background: #fff !important;
+}
+
+.nlm-shell .nlm-provider-notice {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px 18px 0;
+  padding: 11px 12px;
+  border: 1px solid #e5e5e5 !important;
+  border-left: 3px solid #111 !important;
+  border-radius: 8px;
+  color: #111 !important;
+  background: #f7f7f7 !important;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.nlm-shell .nlm-provider-notice p {
+  margin: 3px 0 0;
+  color: #666 !important;
+}
+
+.nlm-shell .nlm-provider-notice button {
+  flex: none;
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid #111 !important;
+  border-radius: 6px;
+  color: #111 !important;
+  background: #fff !important;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.nlm-shell .nlm-provider-actions,
+.nlm-shell .nlm-error-actions,
+.nlm-shell .nlm-source-row-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+}
+
+.nlm-shell .nlm-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.nlm-shell .nlm-error-actions button,
+.nlm-shell .nlm-source-retry {
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid #7f1d1d !important;
+  border-radius: 6px;
+  color: #7f1d1d !important;
+  background: #fff !important;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.nlm-shell .nlm-source-retry {
+  white-space: nowrap;
+}
+
+/* Readable Feynman desk type: the source desk is a learning surface, not a
+   compact admin table. Keep the monochrome system, but restore a comfortable
+   reading scale and a less mechanical UI face. */
+.nlm-shell {
+  font-family: "Work Sans", "Aptos", "Segoe UI Variable", "Segoe UI", Inter, ui-sans-serif, sans-serif !important;
+  font-size: 15px;
+  letter-spacing: -0.008em;
+}
+
+.nlm-shell .nlm-brand { font-size: 23px; }
+.nlm-shell .nlm-title strong { max-width: 520px; font-size: 16px; letter-spacing: -0.02em; }
+.nlm-shell .nlm-title span { font-size: 12px; }
+.nlm-shell .nlm-panel-heading { min-height: 60px; padding-inline: 18px; font-size: 17px; letter-spacing: -0.02em; }
+.nlm-shell .nlm-add-source { min-height: 44px; font-size: 14px; }
+.nlm-shell .nlm-source-context { padding: 14px; }
+.nlm-shell .nlm-source-context > span { font-size: 11px; }
+.nlm-shell .nlm-source-context p { font-size: 13px; line-height: 1.55; }
+.nlm-shell .nlm-select-all { font-size: 12px; }
+.nlm-shell .nlm-select-all button { font-size: 12px; }
+.nlm-shell .nlm-source-row { padding: 12px 7px; }
+.nlm-shell .nlm-source-copy { gap: 4px; }
+.nlm-shell .nlm-source-copy strong { font-size: 14px; }
+.nlm-shell .nlm-source-copy small { font-size: 12px; }
+.nlm-shell .nlm-center-tabs button { padding-inline: 20px; font-size: 15px; }
+.nlm-shell .nlm-proof-canvas { padding: clamp(30px, 5vw, 64px) clamp(24px, 5vw, 68px) 46px; }
+.nlm-shell .nlm-proof-intro { max-width: 800px; }
+.nlm-shell .nlm-proof-intro h1 { font-size: clamp(34px, 4vw, 54px); line-height: 1.04; letter-spacing: -0.055em; }
+.nlm-shell .nlm-proof-intro p { max-width: 680px; font-size: 16px; line-height: 1.65; }
+.nlm-shell .nlm-proof-loop { font-size: 12px; }
+.nlm-shell .nlm-proof-empty { max-width: 600px; margin: 72px auto; padding: 38px 32px; }
+.nlm-shell .nlm-proof-empty h2 { font-size: 24px; letter-spacing: -0.035em; }
+.nlm-shell .nlm-proof-empty p { font-size: 15px; line-height: 1.65; }
+.nlm-shell .nlm-proof-form { max-width: 820px; padding: 30px; }
+.nlm-shell .nlm-proof-form h2 { font-size: 28px; letter-spacing: -0.035em; }
+.nlm-shell .nlm-proof-boundary { font-size: 15px; }
+.nlm-shell .nlm-proof-source strong { font-size: 16px; }
+.nlm-shell .nlm-proof-field { font-size: 14px; }
+.nlm-shell .nlm-proof-field textarea { padding: 14px; font-size: 15px; line-height: 1.6; }
+.nlm-shell .nlm-proof-submit { font-size: 12px; }
+.nlm-shell .nlm-proof-submit button { min-height: 44px; padding-inline: 18px; font-size: 14px; }
+.nlm-shell .nlm-proof-feedback p { font-size: 14px; }
+.nlm-shell .nlm-studio-grid { gap: 10px; }
+.nlm-shell .nlm-studio-card { min-height: 98px; padding: 13px; }
+.nlm-shell .nlm-studio-card strong { font-size: 13px; }
+.nlm-shell .nlm-studio-card small { font-size: 11px; line-height: 1.4; }
+.nlm-shell .nlm-chat-welcome h1 { font-size: clamp(28px, 3vw, 38px); }
+.nlm-shell .nlm-chat-welcome p { font-size: 15px; }
+.nlm-shell .nlm-message-content p { font-size: 15px; line-height: 1.7; }
+
+@media (max-width: 680px) {
+  .nlm-shell .nlm-title strong { max-width: 190px; font-size: 14px; }
+  .nlm-shell .nlm-panel-heading { min-height: 56px; font-size: 16px; }
+  .nlm-shell .nlm-proof-canvas { padding: 28px 18px 34px; }
+  .nlm-shell .nlm-proof-intro h1 { font-size: 35px; }
+  .nlm-shell .nlm-proof-intro p { font-size: 15px; }
+  .nlm-shell .nlm-proof-form { padding: 20px; }
+  .nlm-shell .nlm-proof-form h2 { font-size: 24px; }
+  .nlm-shell .nlm-studio-card { min-height: 88px; }
+}
+
+/* Shared Feynman editorial surface: the notebook is the source-to-proof
+   instrument, so it inherits the landing/home grid, Work Sans, and cobalt
+   signal instead of feeling like a separate notebook product. */
+.nlm-shell {
+  --nlm-accent: #315efb;
+  background-color: #f7f7f3 !important;
+  background-image: linear-gradient(rgba(17,17,17,.045) 1px, transparent 1px), linear-gradient(90deg, rgba(17,17,17,.045) 1px, transparent 1px) !important;
+  background-size: 28px 28px !important;
+  font-family: "Work Sans", "Aptos", "Segoe UI Variable", "Segoe UI", sans-serif !important;
+}
+.nlm-shell .nlm-topbar {
+  min-height: 68px;
+  border-bottom: 1px solid #d8d8d0 !important;
+  background: rgba(247,247,243,.94) !important;
+  backdrop-filter: blur(10px);
+}
+.nlm-shell .nlm-brand { color: #111 !important; letter-spacing: -.08em; }
+.nlm-shell .nlm-brand span { color: var(--nlm-accent) !important; }
+.nlm-shell .nlm-title strong { color: #111 !important; }
+.nlm-shell .nlm-title span { color: #686863 !important; font-family: ui-monospace, SFMono-Regular, Consolas, monospace !important; letter-spacing: .05em; }
+.nlm-shell .nlm-create-button { border-radius: 0 !important; border-color: #111 !important; color: #fff !important; background: #111 !important; box-shadow: 3px 3px 0 var(--nlm-accent) !important; }
+.nlm-shell .nlm-workspace { gap: 12px; padding: 12px; background: transparent !important; }
+.nlm-shell .nlm-panel { border: 1px solid #d8d8d0 !important; border-radius: 0 !important; background: #fffefa !important; }
+.nlm-shell .nlm-sources,
+.nlm-shell .nlm-studio { background: #f4f4ef !important; }
+.nlm-shell .nlm-center { background: #fffefa !important; }
+.nlm-shell .nlm-center-tabs { border-bottom-color: #d8d8d0 !important; background: #f4f4ef !important; }
+.nlm-shell .nlm-center-tabs button { border-radius: 0 !important; color: #686863 !important; }
+.nlm-shell .nlm-center-tabs button.active { border-bottom: 2px solid #111 !important; color: #111 !important; background: #fffefa !important; }
+.nlm-shell .nlm-proof-canvas { background-color: #fffefa !important; background-image: linear-gradient(rgba(17,17,17,.035) 1px, transparent 1px), linear-gradient(90deg, rgba(17,17,17,.035) 1px, transparent 1px) !important; background-size: 24px 24px !important; }
+.nlm-shell .nlm-kicker { color: #555550 !important; font-family: ui-monospace, SFMono-Regular, Consolas, monospace !important; letter-spacing: .12em; }
+.nlm-shell .nlm-proof-intro h1 { color: #111 !important; letter-spacing: -.075em; }
+.nlm-shell .nlm-proof-intro p,
+.nlm-shell .nlm-proof-empty p,
+.nlm-shell .nlm-proof-boundary { color: #686863 !important; }
+.nlm-shell .nlm-proof-loop strong { color: #fff !important; background: #111 !important; }
+.nlm-shell .nlm-proof-loop i { color: var(--nlm-accent) !important; }
+.nlm-shell .nlm-proof-empty { border: 1px dashed #bdbdb4 !important; border-radius: 0 !important; background: rgba(247,247,243,.8) !important; }
+.nlm-shell .nlm-proof-empty > span { color: var(--nlm-accent) !important; background: #e9edff !important; }
+.nlm-shell .nlm-proof-cta { border-radius: 0 !important; color: #fff !important; background: #111 !important; box-shadow: 3px 3px 0 var(--nlm-accent) !important; }
+.nlm-shell .nlm-source-context { border-left: 3px solid var(--nlm-accent) !important; border-radius: 0 !important; background: #f4f4ef !important; }
+.nlm-shell .nlm-source-row { border-radius: 0 !important; }
+.nlm-shell .nlm-source-row.selected { border-color: #111 !important; background: #eef0ff !important; }
+.nlm-shell .nlm-studio-card { border-radius: 0 !important; background: #fffefa !important; }
+.nlm-shell .nlm-studio-card:hover,
+.nlm-shell .nlm-studio-card:focus-visible { border-color: var(--nlm-accent) !important; background: #eef0ff !important; }
+.nlm-shell .nlm-studio-icon { color: var(--nlm-accent) !important; background: #eef0ff !important; }
+.nlm-shell .nlm-saved-heading { color: #555550 !important; font-family: ui-monospace, SFMono-Regular, Consolas, monospace !important; }
+.nlm-shell .nlm-composer { border-top-color: #d8d8d0 !important; background: #fffefa !important; }
+.nlm-shell .nlm-composer textarea { color: #111 !important; font-family: "Work Sans", sans-serif !important; font-size: 15px !important; }
+.nlm-shell .nlm-composer button { color: #fff !important; background: #111 !important; }
+
+@media (max-width: 680px) {
+  .nlm-shell .nlm-workspace { padding: 8px; }
+  .nlm-shell .nlm-proof-canvas { background-size: 20px 20px !important; }
+}

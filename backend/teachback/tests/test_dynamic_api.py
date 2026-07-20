@@ -6,7 +6,11 @@ import json
 from pathlib import Path
 
 import pytest
+from django.contrib.auth import get_user_model
 from rest_framework.test import APIClient
+
+from teachback.dynamic import ensure_catalog
+from teachback.models import LearnerMemory, LearnerProfile, LearningAttempt, Module
 
 
 V2_CASES = json.loads(
@@ -88,6 +92,39 @@ def test_learner_profile_recommendation_memory_isolation_and_export(client: APIC
     deleted = client.delete(f"/api/v1/learners/{learner_a}/memory")
     assert deleted.status_code == 200
     assert client.get(f"/api/v1/learners/{learner_a}/memory").json()["items"] == []
+
+
+@pytest.mark.django_db
+def test_account_backed_legacy_learner_state_requires_the_owning_session() -> None:
+    user = get_user_model().objects.create_user(username="protected@example.com", password="safe-password-123")
+    profile = LearnerProfile.objects.create(account=user, anonymous_key="account-backed-legacy", memory_enabled=True)
+    LearnerMemory.objects.create(profile=profile, key="private-note", content="Do not expose this learner state.", consented=True)
+    ensure_catalog()
+    attempt = LearningAttempt.objects.create(
+        profile=profile,
+        module=Module.objects.get(module_id="sampling-aliasing"),
+        learner_text="A private account-backed fixture attempt.",
+    )
+
+    anonymous = APIClient()
+    assert anonymous.get(f"/api/v1/learners/{profile.anonymous_key}/memory").status_code == 404
+    assert anonymous.get(f"/api/v1/learners/{profile.anonymous_key}/memory/export").status_code == 404
+    assert anonymous.patch(
+        f"/api/v1/learners/{profile.anonymous_key}/preferences",
+        {"learningMode": "build"},
+        format="json",
+    ).status_code == 404
+    assert anonymous.post(
+        "/api/v1/modules/sampling-aliasing/attempts",
+        {"learnerId": profile.anonymous_key, "learnerText": "Attempt to write another learner's state."},
+        format="json",
+    ).status_code == 404
+    assert anonymous.get(f"/api/v1/attempts/{attempt.attempt_id}/record").status_code == 404
+
+    owner = APIClient()
+    owner.force_login(user)
+    assert owner.get(f"/api/v1/learners/{profile.anonymous_key}/memory").status_code == 200
+    assert owner.get(f"/api/v1/attempts/{attempt.attempt_id}/record").status_code == 200
 
 
 @pytest.mark.django_db

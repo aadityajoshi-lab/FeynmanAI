@@ -1,67 +1,129 @@
 # Feynman AI local runbook
 
-## Backend
+Feynman's default local experience is Goal Mode: start with a capability, confirm a learning contract, complete one active task, and record observable evidence. The Source Desk and legacy dynamic-study routes remain available, but they are secondary to the goal workflow.
+
+## Prerequisites
+
+- Python with `venv` support
+- Node.js and npm
+- A free local port `8000` for Django and `3000` for Next.js
+
+In PowerShell, use `npm.cmd` if an execution policy blocks `npm.ps1`.
+
+## Backend setup
 
 ```powershell
 cd backend
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+Copy-Item .env.example .env
 python manage.py migrate
 python manage.py check
-python -m pytest -q
-python manage.py runserver 127.0.0.1:8000
+python manage.py runserver 127.0.0.1:8000 --noreload
 ```
 
-The checked-in local development environment uses `backend/.env`:
+`backend/.env` is local-only. Do not commit it. Configure the browser origins explicitly; they must exactly match the origin used to open the frontend:
 
 ```text
-LLM_PROVIDER=fireworks
-OPENAI_MODEL=gpt-5.6
-OPENAI_API_KEY=
-FIREWORKS_API_KEY=your-fireworks-key
-FIREWORKS_MODEL=accounts/fireworks/models/qwen3p7-plus
-FIREWORKS_BASE_URL=https://api.fireworks.ai/inference/v1
+DJANGO_DEBUG=true
+DJANGO_SECRET_KEY=feynman-dev-only-secret
+DJANGO_ALLOWED_HOSTS=127.0.0.1,localhost
+DJANGO_CORS_ALLOWED_ORIGINS=http://127.0.0.1:3000,http://localhost:3000
+DJANGO_CSRF_TRUSTED_ORIGINS=http://127.0.0.1:3000,http://localhost:3000
 ```
 
-The default local provider is Fireworks when `FIREWORKS_API_KEY` is configured. The learner UI exposes Fireworks and OpenAI only; the deterministic fixture is retained for backend tests and never silently replaces a live response.
+Do not use an arbitrary-origin CORS policy. The frontend bootstraps the Django CSRF cookie through `GET /api/v1/auth/csrf`, then sends browser credentials and `X-CSRFToken` on authenticated mutating requests. Keep both the CORS and CSRF origin allowlists synchronized with the deployed frontend URL.
 
-## Frontend
+## Frontend setup
 
 In a second terminal:
 
 ```powershell
 cd frontend
-npm install
+npm.cmd install
+Copy-Item .env.example .env.local
 $env:NEXT_PUBLIC_API_BASE_URL = "http://127.0.0.1:8000/api/v1"
-npm run dev
+npm.cmd run dev -- --hostname 127.0.0.1
 ```
 
-Open `http://localhost:3000/study/new` for the current flow. Name a subject, upload a PDF/image/video/audio or add a URL, select a chapter or the full source collection, choose a learning method, and open the minimalist study desk. The module is generated from the selected source candidates; the learner loop is model-authored whiteboard actions -> prediction/retrieval/teach-back -> exam bridge. A 2D/3D scene is optional and can be opened later through the contextual module copilot when the generated manifest contains a renderable configuration.
+The durable configuration belongs in `frontend/.env.local`:
 
-The study desk includes a source-bounded module copilot at `POST /api/v1/study-plans/chat`. It can answer a question from server-owned source spans and return only typed controls such as next/previous scene, focus checkpoint, repeat explanation, change learning mode, or show an available visualization. It cannot execute browser code, accept source text, or create evidence quotes.
+```text
+NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000/api/v1
+```
 
-After an incorrect checkpoint, the desk keeps the text/diagram correction available immediately and offers an optional guided video. The relevant OpenMAIC video-generation slice is embedded in the Feynman frontend; configure `frontend/.env.local` with `VIDEO_PROVIDER=seedance` and `VIDEO_SEEDANCE_API_KEY`. The learner browser never receives the provider key. The app generates a 1–5 minute sequenced clip lesson from approved source context.
+Restart the Next.js process after changing `NEXT_PUBLIC_API_BASE_URL`; `NEXT_PUBLIC_*` values are compiled into the browser bundle. Do not run `npm.cmd run build` concurrently with `npm.cmd run dev`: both use `frontend/.next`, so restart the dev server after a production build before doing browser checks. Open `http://127.0.0.1:3000/` for the primary workflow. `http://localhost:3000/` also works when it remains present in the backend CORS and CSRF allowlists.
 
-Uploads are sent to `POST /api/v1/study-sources/ingest`. PDF text is returned as page-located candidate spans; non-PDF media is retained with an explicit extraction/review state until its authoring pipeline is implemented. Every upload remains `awaiting_approval`, `autoApproved: false`, and `publishable: false`. `POST /api/v1/study-plans` asks the selected live provider for a typed module and rejects partial, malformed, or unapproved output.
+## Goal Mode browser smoke test
 
-The DSAP source pack is intentionally marked `instructor_review_required` in `contracts/v2/source-pack.json`. Until an instructor changes that approval state to `approved`, explanation checkpoints fail closed with `source_pack_not_approved`; this keeps unreviewed text from becoming evidence.
+Use a fresh local test account or a clearly named disposable account. This flow is the acceptance check for the default experience.
 
-## Live OpenAI provider
+1. Open `/` and enter a concrete capability, such as “Trace an operating-system scheduler.” Add starting point, time shape, and outcome only if useful.
+2. Select **Build my learning contract**. If unsigned in, create an account or sign in on `/onboarding`; confirm that the pending goal survives the detour.
+3. On `/goals/new`, review the visible contract and select **Confirm and begin**. Confirm that a goal overview is created and one next action is visible.
+4. Open `/goals/<goalId>/learn`. Complete the single active task with an actual prediction, explanation, derivation, debug result, simulation, application, build result, or transfer attempt, then select **Submit evidence**.
+5. Confirm the Evidence Rail updates and that the same record appears on `/evidence`. It should be an observed record unless it meets the required source-supported verification conditions.
+6. In the Source Dock, select **Add context**. This opens the universal Source Desk at `/sources?goal=<goalId>`. Create a source-bounded notebook and add a small PDF or pasted-text source; wait for its extraction state to become ready.
+7. Refresh the Source Desk and confirm the notebook/source remains present. Ask a question using only the selected ready source and confirm the response displays source/page anchors. Do not treat the answer itself as evidence.
+8. Return to the goal workspace and confirm that unselected or deleted sources are not used for a grounded answer or generated output.
+9. On `/evidence`, select one or more evidence records and choose an enrolled test course. Select **Share** and confirm the course receives only the selected records.
+10. In a separate browser profile signed in as that course's instructor, open the cohort view and confirm the shared record is visible while private notebooks and raw chats are absent.
+11. Back in the learner profile, open `/settings/privacy` and select **Revoke access** for the share. Refresh the instructor cohort view and confirm the record disappears immediately.
+12. Repeat the workspace check at a narrow viewport. Source and Evidence controls must remain reachable through the responsive pane controls.
 
-Only enable this after a valid server-side key is available:
+Steps 9–11 require a pre-provisioned institution workspace, an instructor, a course, and an enrolled learner. This is intentional: the API refuses a share unless the learner is enrolled, and an instructor sees only evidence covered by an active share. Use a separate disposable instructor account for this check.
+
+## Automated verification
+
+Run these from a clean terminal after migrations and dependency installation:
 
 ```powershell
-$env:LLM_PROVIDER = "openai"
-$env:OPENAI_MODEL = "gpt-5.6"
-$env:OPENAI_API_KEY = "..."
-python manage.py runserver 127.0.0.1:8000
+# backend
+cd backend
+python manage.py check
+python manage.py makemigrations --check --dry-run
+python -m pytest -q
+
+# frontend
+cd frontend
+npm.cmd run typecheck
+npm.cmd test
+npm.cmd run build
 ```
 
-Never put `OPENAI_API_KEY` in `frontend/.env.local` or browser code. If the provider is unavailable, the backend must fail closed as `human_review` rather than silently claiming a live result.
+The backend suite covers goals, evidence, sharing/revocation, source scoping/deletion, notebook compatibility, and CORS behavior. The frontend suite covers API contracts, CSRF request headers, service-unavailable behavior, source selection, and evidence submission.
 
-## Verification
+## Provider configuration
 
-- Backend: `python manage.py check` and `python -m pytest -q`
-- Frontend: `npm run typecheck`, `npm run test`, `npm run build`
-- Cold run: fresh browser, upload a source, build a live module, reveal generated actions, submit a checkpoint response, and verify the provider badge, source anchors, and review banner.
+Provider credentials are server-only. Goal creation, contracts, routes, and evidence records do not require a browser-visible provider key.
+
+The legacy dynamic-module builder uses Fireworks when configured:
+
+```text
+LLM_PROVIDER=fireworks
+FIREWORKS_API_KEY=your-fireworks-key
+FIREWORKS_MODEL=accounts/fireworks/models/qwen3p7-plus
+FIREWORKS_BASE_URL=https://api.fireworks.ai/inference/v1
+```
+
+OpenAI remains an optional server-side live provider:
+
+```text
+LLM_PROVIDER=openai
+OPENAI_MODEL=gpt-5.6
+OPENAI_API_KEY=your-server-side-key
+```
+
+Optional source OCR can be configured with `MISTRAL_API_KEY`; without it, the local extraction path is used where supported. Never place Fireworks, OpenAI, Mistral, narration, or other provider keys in `frontend/.env.local` or browser code. A failed live provider call must remain a visible provider failure; the deterministic fixture is retained for automated tests and must not silently replace a failed live result.
+
+## Secondary legacy study paths
+
+These routes are kept for notebook compatibility and dynamic-module experiments. They are not the primary entry point.
+
+- `/sources` is the current Source Desk route. It may be opened with `?goal=<goalId>` to create source context alongside a goal, or independently for a notebook. `/study/new` redirects to it for compatibility.
+- `/study/workspace` and `/subjects` are legacy dynamic-module learning routes.
+- `POST /api/v1/study-sources/ingest` performs bounded legacy-source ingestion.
+- `POST /api/v1/study-plans` generates a legacy source-bounded module through the configured live provider.
+
+The legacy source flow keeps source candidates reviewable. PDF extraction provides page-located candidate spans; non-PDF authoring stages may remain in an explicit extraction/review state. Do not represent unapproved or provider-generated content as verified learner evidence.

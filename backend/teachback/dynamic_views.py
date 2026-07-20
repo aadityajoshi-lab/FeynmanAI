@@ -22,18 +22,42 @@ def _profile_id(profile):
     return profile.anonymous_key
 
 
-def _profile_for_path(learner_id):
+def _request_can_access_profile(request, profile: LearnerProfile) -> bool:
+    """Keep account-backed learner state behind its owning browser session.
+
+    The fixture API predates account authentication, so profiles without an
+    account deliberately remain addressable by their anonymous key.  Once a
+    profile is attached to a Django user, however, the anonymous key is no
+    longer an authorization credential.
+    """
+    if not profile.account_id:
+        return True
+    user = getattr(request, "user", None)
+    return bool(user and getattr(user, "is_authenticated", False) and user.pk == profile.account_id)
+
+
+def _profile_for_path(request, learner_id):
     profile = LearnerProfile.objects.filter(anonymous_key=learner_id).first()
-    if not profile:
+    if not profile or not _request_can_access_profile(request, profile):
         raise Http404("Unknown learner")
     return profile
 
 
-def _attempt(value):
+def _profile_for_key(request, key: str | None) -> tuple[LearnerProfile, bool]:
+    profile, created = profile_for_key(key)
+    if not _request_can_access_profile(request, profile):
+        raise Http404("Unknown learner")
+    return profile, created
+
+
+def _attempt(request, value):
     try:
-        return LearningAttempt.objects.select_related("profile", "module", "concept", "module__subject_pack").get(attempt_id=uuid.UUID(str(value)))
+        attempt = LearningAttempt.objects.select_related("profile", "module", "concept", "module__subject_pack").get(attempt_id=uuid.UUID(str(value)))
     except (ValueError, LearningAttempt.DoesNotExist):
         raise Http404("Unknown attempt")
+    if not _request_can_access_profile(request, attempt.profile):
+        raise Http404("Unknown attempt")
+    return attempt
 
 
 def _attempt_payload(attempt):
@@ -116,7 +140,7 @@ class ModuleManifestView(APIView):
 class AnonymousLearnerView(APIView):
     def post(self, request):
         requested = request.data.get("learnerId") if isinstance(request.data, dict) else None
-        profile, created = profile_for_key(requested or request.headers.get("X-Learner-ID"))
+        profile, created = _profile_for_key(request, requested or request.headers.get("X-Learner-ID"))
         response = Response({**profile_dict(profile), "created": created}, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
         response["X-Learner-ID"] = profile.anonymous_key
         return response
@@ -125,10 +149,10 @@ class AnonymousLearnerView(APIView):
 @method_decorator(csrf_exempt, name="dispatch")
 class LearnerProfileView(APIView):
     def get(self, request, learner_id):
-        return Response(profile_dict(_profile_for_path(learner_id)))
+        return Response(profile_dict(_profile_for_path(request, learner_id)))
 
     def patch(self, request, learner_id):
-        profile = _profile_for_path(learner_id)
+        profile = _profile_for_path(request, learner_id)
         body = request.data if isinstance(request.data, dict) else {}
         if "displayName" in body:
             if not isinstance(body["displayName"], str) or len(body["displayName"]) > 120:
@@ -146,7 +170,7 @@ class LearnerProfileView(APIView):
         return Response(profile_dict(profile))
 
     def delete(self, request, learner_id):
-        profile = _profile_for_path(learner_id)
+        profile = _profile_for_path(request, learner_id)
         profile.delete()
         return Response({"deleted": True, "learnerId": learner_id})
 
@@ -154,10 +178,10 @@ class LearnerProfileView(APIView):
 @method_decorator(csrf_exempt, name="dispatch")
 class LearnerPreferencesView(APIView):
     def get(self, request, learner_id):
-        return Response({"learnerId": learner_id, "preferences": _profile_for_path(learner_id).preferences})
+        return Response({"learnerId": learner_id, "preferences": _profile_for_path(request, learner_id).preferences})
 
     def patch(self, request, learner_id):
-        profile = _profile_for_path(learner_id)
+        profile = _profile_for_path(request, learner_id)
         if not isinstance(request.data, dict):
             return _err("preferences must be an object")
         profile.preferences = {**profile.preferences, **request.data}
@@ -168,11 +192,11 @@ class LearnerPreferencesView(APIView):
 @method_decorator(csrf_exempt, name="dispatch")
 class LearnerMemoryView(APIView):
     def get(self, request, learner_id):
-        profile = _profile_for_path(learner_id)
+        profile = _profile_for_path(request, learner_id)
         return Response({"learnerId": learner_id, "memoryEnabled": profile.memory_enabled, "items": [{"key": m.key, "kind": m.kind, "content": m.content, "enabled": m.enabled} for m in profile.memory_items.filter(enabled=True)]})
 
     def post(self, request, learner_id):
-        profile = _profile_for_path(learner_id)
+        profile = _profile_for_path(request, learner_id)
         body = request.data if isinstance(request.data, dict) else {}
         if not profile.memory_enabled:
             return _err("Memory is disabled for this learner", "memory_disabled", 403)
@@ -185,7 +209,7 @@ class LearnerMemoryView(APIView):
         return Response({"key": item.key, "kind": item.kind, "content": item.content, "enabled": item.enabled}, status=201)
 
     def patch(self, request, learner_id):
-        profile = _profile_for_path(learner_id)
+        profile = _profile_for_path(request, learner_id)
         if "memoryEnabled" not in (request.data or {}):
             return _err("memoryEnabled is required")
         profile.memory_enabled = bool(request.data["memoryEnabled"])
@@ -195,7 +219,7 @@ class LearnerMemoryView(APIView):
         return Response({"learnerId": learner_id, "memoryEnabled": profile.memory_enabled})
 
     def delete(self, request, learner_id):
-        profile = _profile_for_path(learner_id)
+        profile = _profile_for_path(request, learner_id)
         deleted, _ = profile.memory_items.all().delete()
         return Response({"learnerId": learner_id, "deleted": deleted})
 
@@ -203,7 +227,7 @@ class LearnerMemoryView(APIView):
 @method_decorator(csrf_exempt, name="dispatch")
 class LearnerMemoryExportView(APIView):
     def get(self, request, learner_id):
-        profile = _profile_for_path(learner_id)
+        profile = _profile_for_path(request, learner_id)
         return Response({
             "learnerId": learner_id,
             "profile": profile_dict(profile),
@@ -219,17 +243,17 @@ class LearnerMemoryExportView(APIView):
 @method_decorator(csrf_exempt, name="dispatch")
 class RecommendationView(APIView):
     def get(self, request, learner_id):
-        return Response(recommendation(_profile_for_path(learner_id), request.query_params.get("subjectId")))
+        return Response(recommendation(_profile_for_path(request, learner_id), request.query_params.get("subjectId")))
 
 
 @method_decorator(csrf_exempt, name="dispatch")
 class SkillEvidenceView(APIView):
     def get(self, request, learner_id):
-        profile = _profile_for_path(learner_id)
+        profile = _profile_for_path(request, learner_id)
         return Response({"learnerId": learner_id, "skills": [{"subjectId": s.subject_id, "skillId": s.skill_id, "status": s.status, "masteryScore": s.mastery_score, "evidenceCount": s.evidence_count, "recentSignal": s.recent_signal} for s in profile.skills.all()]})
 
     def post(self, request, learner_id):
-        profile = _profile_for_path(learner_id)
+        profile = _profile_for_path(request, learner_id)
         body = request.data if isinstance(request.data, dict) else {}
         subject_id, skill_id = body.get("subjectId"), body.get("skillId")
         if not isinstance(subject_id, str) or not isinstance(skill_id, str) or not subject_id or not skill_id:
@@ -247,7 +271,7 @@ class ModuleAttemptsView(APIView):
         if not module:
             return _err("Unknown module", "not_found", 404)
         body = request.data if isinstance(request.data, dict) else {}
-        profile, _ = profile_for_key(body.get("learnerId") or request.headers.get("X-Learner-ID"))
+        profile, _ = _profile_for_key(request, body.get("learnerId") or request.headers.get("X-Learner-ID"))
         if body.get("conceptId"):
             concept = module.concepts.filter(concept_id=body.get("conceptId")).first()
         else:
@@ -300,7 +324,7 @@ def _checkpoint_response(attempt, checkpoint_id, kind, body):
 @method_decorator(csrf_exempt, name="dispatch")
 class CheckpointView(APIView):
     def post(self, request, attempt_id, checkpoint_id, kind):
-        attempt = _attempt(attempt_id)
+        attempt = _attempt(request, attempt_id)
         body = request.data if isinstance(request.data, dict) else {}
         if kind == "explain" and (not attempt.concept or not attempt.concept.source_pack or not attempt.concept.source_pack.approved):
             return Response({"checkpointId": checkpoint_id, "state": "abstained", "reasonCode": "source_pack_not_approved", "sourceAnchorIds": [], **_runtime_metadata(attempt)})
@@ -310,7 +334,7 @@ class CheckpointView(APIView):
 @method_decorator(csrf_exempt, name="dispatch")
 class AttemptLearningModeView(APIView):
     def post(self, request, attempt_id):
-        attempt = _attempt(attempt_id)
+        attempt = _attempt(request, attempt_id)
         mode = request.data.get("learningMode") if isinstance(request.data, dict) else None
         if mode not in LEARNING_MODE_IDS:
             return _err("learningMode must be one of the versioned subject-pack learning modes")
@@ -323,7 +347,7 @@ class AttemptLearningModeView(APIView):
 @method_decorator(csrf_exempt, name="dispatch")
 class AttemptClarificationView(APIView):
     def post(self, request, attempt_id):
-        attempt = _attempt(attempt_id)
+        attempt = _attempt(request, attempt_id)
         body = request.data if isinstance(request.data, dict) else {}
         try:
             question = validate_question(body.get("question"))
@@ -347,7 +371,7 @@ class AttemptClarificationView(APIView):
 @method_decorator(csrf_exempt, name="dispatch")
 class AttemptRevisionView(APIView):
     def post(self, request, attempt_id):
-        attempt = _attempt(attempt_id)
+        attempt = _attempt(request, attempt_id)
         body = request.data if isinstance(request.data, dict) else {}
         try:
             repair = validate_repair(body.get("learnerRepair"))
@@ -368,11 +392,11 @@ class AttemptRevisionView(APIView):
 @method_decorator(csrf_exempt, name="dispatch")
 class AttemptRecordView(APIView):
     def get(self, request, attempt_id):
-        return Response(_attempt_payload(_attempt(attempt_id)))
+        return Response(_attempt_payload(_attempt(request, attempt_id)))
 
 
 @method_decorator(csrf_exempt, name="dispatch")
 class AttemptInspectionView(APIView):
     def get(self, request, attempt_id):
-        attempt = _attempt(attempt_id)
+        attempt = _attempt(request, attempt_id)
         return Response({"attemptId": str(attempt.attempt_id), "learnerId": attempt.profile.anonymous_key, "subjectId": attempt.module.subject_pack.subject_id, "moduleId": attempt.module.module_id, "recordVersion": attempt.record_version, "providerMode": "codex_fixture", "sourceBound": bool(attempt.concept and attempt.concept.source_pack), "checkpointCount": attempt.checkpoints.count(), "skillEvidence": [{"skillId": s.skill_id, "status": s.status, "masteryScore": s.mastery_score} for s in attempt.profile.skills.filter(subject_id=attempt.module.subject_pack.subject_id)]})

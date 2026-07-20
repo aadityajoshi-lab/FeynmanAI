@@ -14,6 +14,22 @@ def configured(name: str, default: str = "") -> str:
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "feynman-dev-only-secret")
 DEBUG = os.getenv("DJANGO_DEBUG", "true").lower() == "true"
 ALLOWED_HOSTS = [h.strip() for h in os.getenv("DJANGO_ALLOWED_HOSTS", "*").split(",") if h.strip()]
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in configured(
+        "DJANGO_CSRF_TRUSTED_ORIGINS",
+        "http://127.0.0.1:3000,http://localhost:3000",
+    ).split(",")
+    if origin.strip()
+]
+CORS_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in configured(
+        "DJANGO_CORS_ALLOWED_ORIGINS",
+        "http://127.0.0.1:3000,http://localhost:3000",
+    ).split(",")
+    if origin.strip()
+]
 
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
@@ -57,8 +73,24 @@ STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 REST_FRAMEWORK = {
     "DEFAULT_PARSER_CLASSES": ["rest_framework.parsers.JSONParser"],
+    # SessionAuthentication performs CSRF validation for authenticated unsafe
+    # requests. Anonymous registration/login remain usable; the frontend first
+    # calls /api/v1/auth/csrf before its authenticated mutations.
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "teachback.authentication.ClerkAuthentication",
+        "rest_framework.authentication.SessionAuthentication",
+    ],
     "UNAUTHENTICATED_USER": None,
 }
+CLERK_SECRET_KEY = configured("CLERK_SECRET_KEY", "")
+CLERK_AUTHORIZED_PARTIES = [
+    origin.strip()
+    for origin in configured(
+        "CLERK_AUTHORIZED_PARTIES",
+        "http://127.0.0.1:3000,http://localhost:3000",
+    ).split(",")
+    if origin.strip()
+]
 LLM_PROVIDER = configured("LLM_PROVIDER", "fixture").lower()
 OPENAI_MODEL = configured("OPENAI_MODEL", "gpt-5.6")
 OPENAI_API_KEY = configured("OPENAI_API_KEY", "")

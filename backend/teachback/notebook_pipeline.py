@@ -33,11 +33,35 @@ from pypdf import PdfReader
 from django.conf import settings
 
 from .ingestion import IngestionError, extract_pdf_candidates_from_bytes, normalize_extracted_text
-from .models import Notebook, NotebookArtifact, NotebookSource
+from .models import Notebook, NotebookArtifact, NotebookChatMessage, NotebookNote, NotebookSource
+from .providers import record_provider_failure, record_provider_success
 
 
 class NotebookExtractionError(ValueError):
     pass
+
+
+def extraction_error_category(error: object) -> str:
+    """Return a safe, stable category instead of provider exception text.
+
+    Provider error bodies can contain implementation details that do not belong
+    in learner-visible source metadata.  The UI needs a recovery decision, not
+    a copied upstream response.  Keep this deliberately small and
+    presentation-safe so callers can expose it without leaking credentials or
+    request payloads.
+    """
+    value = str(error or "").casefold()
+    if any(marker in value for marker in ("timed out", "timeout", "deadline exceeded")):
+        return "timeout"
+    if any(marker in value for marker in ("401", "403", "unauthorized", "forbidden", "authentication")):
+        return "authentication"
+    if any(marker in value for marker in ("429", "rate limit", "too many requests")):
+        return "rate_limited"
+    if any(marker in value for marker in ("invalid", "malformed", "unprocessable", "422", "400")):
+        return "invalid_response"
+    if any(marker in value for marker in ("connection", "socket", "network", "name or service", "unreachable", "503", "502", "504", "500")):
+        return "unavailable"
+    return "provider_error"
 
 
 def _data_url(payload: bytes, mime_type: str) -> str:
@@ -92,8 +116,11 @@ def _mistral_ocr(payload: bytes, mime_type: str) -> dict:
     )
     try:
         with urllib.request.urlopen(request, timeout=float(getattr(settings, "MISTRAL_OCR_TIMEOUT_SECONDS", 180))) as response:
-            return json.loads(response.read().decode("utf-8"))
+            result = json.loads(response.read().decode("utf-8"))
+            record_provider_success("mistral")
+            return result
     except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        record_provider_failure("mistral", extraction_error_category(exc))
         raise NotebookExtractionError(f"Mistral OCR failed: {exc}") from exc
 
 
@@ -321,7 +348,19 @@ def extract_source(payload: bytes, mime_type: str, sha256: str, *, provider: str
             # local extractor, while exposing the degraded method in metadata.
             if _mistral_network_failure(str(exc)):
                 blocks, assets, stats = _local_extract(payload, mime_type, sha256)
-                stats = {**stats, "warning": "Mistral OCR was unreachable from this computer; local extraction was used so the workspace could continue.", "mistralError": str(exc)[:300]}
+                # Local extraction is real extraction, but it is not a Mistral
+                # result.  Preserve the usable page/block context while making
+                # both the failed provider call and the re-upload recovery path
+                # explicit to the client.  Do not persist the raw exception:
+                # upstream error bodies can contain request/provider details.
+                stats = {
+                    **stats,
+                    "warning": "Mistral OCR was unreachable; local extraction is active. Re-upload the source to retry Mistral OCR.",
+                    "providerStatus": "configured_but_unavailable",
+                    "providerErrorCategory": extraction_error_category(exc),
+                    "retryable": True,
+                    "retryAction": "reupload",
+                }
                 return blocks, assets, stats, "local-fallback-after-mistral-network-error"
             raise
         if not blocks and not assets:
@@ -2001,11 +2040,194 @@ def build_artifact_payload(pack: dict, artifact_type: str) -> tuple[str, dict]:
     raise ValueError("unsupported artifact type")
 
 
+def scoped_knowledge_pack(notebook: Notebook, source_ids: list[str] | None = None) -> dict:
+    """Return one validated, source-bounded view of a notebook memory pack.
+
+    The canonical pack remains stored on ``Notebook``. Chat, lessons, and
+    artifacts all call this helper instead of assembling their own source
+    context, preventing a selected-source answer from accidentally citing an
+    unselected file.
+    """
+    sources = list(notebook.notebook_sources.filter(status="ready", grounding_enabled=True).order_by("created_at", "id"))
+    available = {source.source_id for source in sources}
+    requested = None if source_ids is None else [str(item).strip() for item in source_ids if str(item).strip()]
+    if requested is not None and not requested:
+        raise ValueError("Select at least one ready source.")
+    invalid = sorted(set(requested or []).difference(available))
+    if invalid:
+        raise ValueError("One or more selected sources are unavailable in this notebook.")
+    selected = set(requested or available)
+    if not selected:
+        raise ValueError("Add and process at least one source before using the notebook.")
+    pack = notebook.knowledge_pack or {}
+
+    def includes(item: dict) -> bool:
+        return bool(selected.intersection({str(value) for value in item.get("sourceIds") or []}))
+
+    scoped_sources = [source.source_id for source in sources if source.source_id in selected]
+    return {
+        **pack,
+        "sources": scoped_sources,
+        # Keep only safe locator metadata alongside the already selected
+        # source IDs. Live provider prompts use this catalog to identify the
+        # original document title without receiving unrelated source content.
+        "sourceCatalog": [
+            {
+                "sourceId": source.source_id,
+                "title": source.title,
+                "filename": source.filename,
+            }
+            for source in sources
+            if source.source_id in selected
+        ],
+        "sections": [section for section in pack.get("sections") or [] if includes(section)],
+        "supplementarySections": [section for section in pack.get("supplementarySections") or [] if includes(section)],
+        "concepts": [concept for concept in pack.get("concepts") or [] if includes(concept)],
+        "formulas": [formula for formula in pack.get("formulas") or [] if str(formula.get("sourceId") or "") in selected],
+        "assets": [asset for asset in pack.get("assets") or [] if str(asset.get("sourceId") or "") in selected],
+    }
+
+
+def _chat_message_payload(message: NotebookChatMessage) -> dict:
+    invalidated = message.status == "stale"
+    provider_unavailable = message.status == "provider_unavailable"
+    provider_output_invalid = message.status == "provider_output_invalid"
+    citation_validation_failed = message.status == "citation_validation_failed"
+    degraded = provider_unavailable or provider_output_invalid or citation_validation_failed
+    if citation_validation_failed:
+        provider_message = "The teaching model returned citations that could not be validated. This is a source excerpt, not a generated answer."
+    elif provider_output_invalid:
+        provider_message = "The teaching model returned an invalid response. This is a source excerpt, not a generated answer."
+    elif provider_unavailable:
+        provider_message = "The teaching model was unavailable. This is a source excerpt, not a generated answer."
+    else:
+        provider_message = None
+    return {
+        "messageId": str(message.message_id),
+        "role": message.role,
+        "content": "This source-derived message is unavailable because one of its sources was removed." if invalidated else message.content,
+        "sourceIds": [] if invalidated else message.source_ids or [],
+        "sourceAnchorIds": [] if invalidated else message.source_anchor_ids or [],
+        "groundedIn": message.grounded_in or None,
+        "status": message.status,
+        "invalidated": invalidated,
+        "degraded": degraded,
+        "providerUnavailable": provider_unavailable,
+        "providerOutputInvalid": provider_output_invalid,
+        "citationValidationFailed": citation_validation_failed,
+        "provider": message.provider_name or None,
+        "model": message.provider_model or None,
+        "providerErrorCategory": message.provider_error_category or None,
+        "providerMessage": provider_message,
+        "retryAvailable": degraded,
+        "retryAction": "ask_again" if degraded else None,
+        "createdAt": message.created_at.isoformat(),
+    }
+
+
+def _note_payload(note: NotebookNote) -> dict:
+    return {
+        "noteId": str(note.note_id),
+        "title": note.title,
+        "content": note.content,
+        "sourceIds": note.source_ids or [],
+        "sourceAnchorIds": note.source_anchor_ids or [],
+        "createdAt": note.created_at.isoformat(),
+        "updatedAt": note.updated_at.isoformat(),
+    }
+
+
+def _notebook_artifact_payload(artifact: NotebookArtifact) -> dict:
+    """Serialize artifact provenance without exposing a provider secret."""
+    invalidated = artifact.status == "stale"
+    payload = artifact.payload if isinstance(artifact.payload, dict) else {}
+    provenance = payload.get("provenance") if isinstance(payload.get("provenance"), dict) else {}
+    return {
+        "artifactId": str(artifact.artifact_id),
+        "type": artifact.artifact_type,
+        "title": artifact.title,
+        "status": artifact.status,
+        "payload": {"invalidated": True, "message": "This output is unavailable because a referenced source was removed."} if invalidated else payload,
+        "sourceIds": [] if invalidated else artifact.source_ids or [],
+        "provider": None if invalidated else provenance.get("provider"),
+        "model": None if invalidated else provenance.get("model"),
+        "providerStatus": None if invalidated else provenance.get("status"),
+        "citationValidation": None if invalidated else provenance.get("citationValidation"),
+        "createdAt": artifact.created_at.isoformat(),
+    }
+
+
+def _notebook_source_payload(source: NotebookSource) -> dict:
+    """Expose the durable source location metadata needed by the Source Desk.
+
+    The notebook route remains compatible with its existing source shape, but
+    active Learning OS views also need the same page/block anchors returned by
+    the goal Source Dock.  Returning them here lets a learner inspect a
+    persisted source and understand where a citation came from without
+    rebuilding or broadening the source scope.
+    """
+    extraction = source.extraction if isinstance(source.extraction, dict) else {}
+    blocks = source.blocks if isinstance(source.blocks, list) else []
+    anchor_ids = [
+        str(block.get("sourceAnchor"))
+        for block in blocks
+        if isinstance(block, dict) and str(block.get("sourceAnchor") or "").strip()
+    ]
+    page_count = extraction.get("pageCount")
+    if not isinstance(page_count, int):
+        page_count = max((int(block.get("page") or 1) for block in blocks if isinstance(block, dict)), default=0)
+    block_count = extraction.get("blockCount")
+    if not isinstance(block_count, int):
+        block_count = len(blocks)
+    degraded_local = source.extraction_method == "local-fallback-after-mistral-network-error"
+    return {
+        "sourceId": source.source_id,
+        "title": source.title,
+        "filename": source.filename,
+        "sourceKind": source.source_kind,
+        "mimeType": source.mime_type,
+        "status": source.status,
+        "groundingEnabled": source.grounding_enabled,
+        "extractionMethod": source.extraction_method,
+        "extraction": extraction,
+        "pageCount": page_count,
+        "blockCount": block_count,
+        "anchorIds": list(dict.fromkeys(anchor_ids)),
+        "assets": source.assets,
+        # A source retry always requires a fresh multipart upload: raw upload
+        # bytes are intentionally not persisted after the request finishes.
+        "retryAvailable": bool(source.status == "failed" or degraded_local or extraction.get("retryable")),
+        "retryRequiresReupload": True,
+        "retryAction": "reupload",
+    }
+
+
 def notebook_payload(notebook: Notebook) -> dict:
     pack = notebook.knowledge_pack or {}
     sources = list(notebook.notebook_sources.order_by("created_at", "id"))
     artifacts = list(notebook.artifacts.order_by("-created_at", "-id"))
-    return {"notebookId": str(notebook.notebook_id), "title": notebook.title, "subject": notebook.subject, "description": notebook.description, "learningGoal": notebook.learning_goal, "status": notebook.status, "ocrProvider": notebook.ocr_provider, "stats": notebook.stats, "sources": [{"sourceId": s.source_id, "title": s.title, "filename": s.filename, "sourceKind": s.source_kind, "mimeType": s.mime_type, "status": s.status, "extractionMethod": s.extraction_method, "extraction": s.extraction, "assets": s.assets} for s in sources], "knowledgePack": pack, "knowledgePackMarkdown": notebook.knowledge_pack_markdown, "artifacts": [{"artifactId": str(a.artifact_id), "type": a.artifact_type, "title": a.title, "status": a.status, "payload": a.payload, "createdAt": a.created_at.isoformat()} for a in artifacts]}
+    messages = list(notebook.chat_messages.all())
+    notes = list(notebook.notes.all())
+    return {
+        "notebookId": str(notebook.notebook_id),
+        "title": notebook.title,
+        "subject": notebook.subject,
+        "description": notebook.description,
+        "learningGoal": notebook.learning_goal,
+        "workspaceId": str(notebook.workspace.organization_id) if notebook.workspace_id else None,
+        "goalId": str(notebook.goal.goal_id) if notebook.goal_id else None,
+        "courseId": str(notebook.course.course_id) if notebook.course_id else None,
+        "owned": bool(notebook.owner_profile_id),
+        "status": notebook.status,
+        "ocrProvider": notebook.ocr_provider,
+        "stats": notebook.stats,
+        "sources": [_notebook_source_payload(source) for source in sources],
+        "knowledgePack": pack,
+        "knowledgePackMarkdown": notebook.knowledge_pack_markdown,
+        "artifacts": [_notebook_artifact_payload(artifact) for artifact in artifacts],
+        "chatMessages": [_chat_message_payload(message) for message in messages],
+        "notes": [_note_payload(note) for note in notes],
+    }
 
 
 # Keep the artifact builder close to its source helpers while adding the
@@ -2051,7 +2273,59 @@ def build_artifact_payload(pack: dict, artifact_type: str) -> tuple[str, dict]:
 _build_artifact_payload_with_legacy_slides = build_artifact_payload
 
 
+def _mind_map_payload(pack: dict) -> tuple[str, dict]:
+    sections = [section for section in (pack.get("sections") or []) if _is_learning_section(section)]
+    root_id = "notebook-root"
+    nodes = [{"id": root_id, "label": str(pack.get("title") or "Notebook"), "kind": "root", "sourceIds": []}]
+    edges: list[dict] = []
+    for section in sections[:30]:
+        section_id = str(section.get("sectionId") or f"section-{len(nodes)}")
+        nodes.append({
+            "id": section_id,
+            "label": str(section.get("title") or "Source topic"),
+            "detail": _section_preview(section)[:320],
+            "kind": "topic",
+            "sourceIds": section.get("sourceIds") or [],
+            "sourceAnchors": _section_anchor_ids(section),
+        })
+        edges.append({"from": root_id, "to": section_id})
+    return "Mind map", {
+        "kind": "mind_map",
+        "nodes": nodes,
+        "edges": edges,
+        "note": "Each branch is drawn from a saved notebook section and keeps its source anchors.",
+    }
+
+
+def _data_table_payload(pack: dict) -> tuple[str, dict]:
+    sections = [section for section in (pack.get("sections") or []) if _is_learning_section(section)]
+    formulas_by_section: dict[str, list[str]] = {}
+    for formula in pack.get("formulas") or []:
+        formulas_by_section.setdefault(str(formula.get("sectionId") or ""), []).append(str(formula.get("text") or ""))
+    rows = []
+    for section in sections[:60]:
+        section_id = str(section.get("sectionId") or "")
+        rows.append({
+            "topic": str(section.get("title") or "Source topic"),
+            "pages": [page for page in section.get("pages") or [] if page],
+            "keyIdea": _section_preview(section)[:420],
+            "formulas": formulas_by_section.get(section_id, [])[:4],
+            "sourceIds": section.get("sourceIds") or [],
+            "sourceAnchors": _section_anchor_ids(section),
+        })
+    return "Source data table", {
+        "kind": "data_table",
+        "columns": ["Topic", "Pages", "Key idea", "Formulas"],
+        "rows": rows,
+        "note": "This is a navigable source index, not generated evidence beyond the uploaded material.",
+    }
+
+
 def build_artifact_payload(pack: dict, artifact_type: str) -> tuple[str, dict]:
+    if artifact_type == "mind_map":
+        return _mind_map_payload(pack)
+    if artifact_type == "data_table":
+        return _data_table_payload(pack)
     if artifact_type != "slides":
         return _build_artifact_payload_with_legacy_slides(pack, artifact_type)
     sections = [section for section in (pack.get("sections") or []) if _is_learning_section(section)]

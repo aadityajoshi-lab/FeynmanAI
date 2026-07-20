@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { ChangeEvent, DragEvent, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createNotebook, uploadNotebookSource } from "@/lib/notebookApi";
 import type { NotebookGoal } from "@/lib/notebookTypes";
 
@@ -22,6 +22,8 @@ function fileKey(file: File) { return `${file.name}-${file.size}-${file.lastModi
 
 export default function NotebookIntake() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const goalId = searchParams.get("goal");
   const [title, setTitle] = useState("");
   const [subject, setSubject] = useState("");
   const [description, setDescription] = useState("");
@@ -51,7 +53,7 @@ export default function NotebookIntake() {
     if (!title.trim()) { setError("Name your notebook first — for example, Digital Instrumentation."); return; }
     setBusy(true);
     try {
-      const notebook = await createNotebook({ title: title.trim(), subject: subject.trim() || title.trim(), description: description.trim(), learningGoal: goal, ocrProvider });
+      const notebook = await createNotebook({ title: title.trim(), subject: subject.trim() || title.trim(), description: description.trim(), learningGoal: goal, ocrProvider, ...(goalId ? { goalId } : {}) });
       for (let index = 0; index < files.length; index += 1) {
         const item = files[index];
         setProgress(`Reading source ${index + 1} of ${files.length} · ${item.file.name}`);
