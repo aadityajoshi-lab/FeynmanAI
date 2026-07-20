@@ -5,10 +5,11 @@ import { useEffect } from "react";
 import { setAuthSignOut, setAuthTokenGetter } from "@/lib/learningOsApi";
 
 export function ClerkAuthBridge() {
-  const { getToken, isSignedIn } = useAuth();
+  const { getToken, isLoaded, isSignedIn } = useAuth();
   const { signOut } = useClerk();
 
   useEffect(() => {
+    if (!isLoaded) return;
     setAuthTokenGetter(() => getToken());
     setAuthSignOut(() => signOut());
     document.documentElement.dataset.feynmanAuth = isSignedIn ? "signed-in" : "signed-out";
@@ -17,7 +18,7 @@ export function ClerkAuthBridge() {
       setAuthTokenGetter(null);
       setAuthSignOut(null);
     };
-  }, [getToken, isSignedIn, signOut]);
+  }, [getToken, isLoaded, isSignedIn, signOut]);
 
   return null;
 }

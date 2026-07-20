@@ -13,5 +13,5 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   const clerkKey = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
   const content = clerkKey ? <ClerkProvider publishableKey={clerkKey}><ClerkAuthBridge />{children}</ClerkProvider> : children;
-  return <html lang="en"><body>{content}</body></html>;
+  return <html lang="en" data-feynman-auth={clerkKey ? undefined : "signed-out"}><body>{content}</body></html>;
 }

@@ -52,6 +52,26 @@ function csrfToken() {
 
 let csrfBootstrap: Promise<void> | null = null;
 
+let authBootstrapWait: Promise<void> | null = null;
+
+async function waitForAuthBridge(timeoutMs = 3500) {
+  if (authTokenGetter || typeof window === "undefined" || typeof document === "undefined" || document.documentElement?.dataset.feynmanAuth) return;
+  if (!authBootstrapWait) {
+    authBootstrapWait = new Promise<void>((resolve) => {
+      let settled = false;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        window.removeEventListener("feynman-auth-state", settle);
+        resolve();
+      };
+      window.addEventListener("feynman-auth-state", settle, { once: true });
+      window.setTimeout(settle, timeoutMs);
+    }).finally(() => { authBootstrapWait = null; });
+  }
+  await authBootstrapWait;
+}
+
 async function ensureCsrfToken() {
   if (typeof document === "undefined" || csrfToken()) return;
   if (!csrfBootstrap) {
@@ -66,17 +86,31 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   const method = (init.method || "GET").toUpperCase();
   const unsafe = !["GET", "HEAD", "OPTIONS"].includes(method);
+  await waitForAuthBridge();
+  const send = async (token: string | null) => {
+    const requestHeaders = new Headers(headers);
+    if (token) requestHeaders.set("Authorization", `Bearer ${token}`);
+    else requestHeaders.delete("Authorization");
+    const anonymousLearnerId = typeof window !== "undefined" ? window.localStorage.getItem("feynman.learnerId") : null;
+    if (anonymousLearnerId) requestHeaders.set("X-Feynman-Anonymous-Learner", anonymousLearnerId);
+    if (unsafe && !token) await ensureCsrfToken();
+    if (init.body && !requestHeaders.has("Content-Type")) requestHeaders.set("Content-Type", "application/json");
+    const csrf = csrfToken();
+    if (unsafe && !token && csrf && !requestHeaders.has("X-CSRFToken")) requestHeaders.set("X-CSRFToken", csrf);
+    return fetch(`${API_BASE}${path}`, { ...init, headers: requestHeaders, credentials: "include" });
+  };
+  let token = await getAuthToken();
   let response: Response;
   try {
-    const token = await getAuthToken();
-    if (token) headers.set("Authorization", `Bearer ${token}`);
-    const anonymousLearnerId = typeof window !== "undefined" ? window.localStorage.getItem("feynman.learnerId") : null;
-    if (anonymousLearnerId) headers.set("X-Feynman-Anonymous-Learner", anonymousLearnerId);
-    if (unsafe && !token) await ensureCsrfToken();
-    if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
-    const csrf = csrfToken();
-    if (unsafe && !token && csrf && !headers.has("X-CSRFToken")) headers.set("X-CSRFToken", csrf);
-    response = await fetch(`${API_BASE}${path}`, { ...init, headers, credentials: "include" });
+    response = await send(token);
+    if (response.status === 401) {
+      if (!token) await waitForAuthBridge(2500);
+      const freshToken = await getAuthToken();
+      if (freshToken && freshToken !== token) {
+        token = freshToken;
+        response = await send(token);
+      }
+    }
   } catch {
     throw new LearningOsApiError(
       "Feynman's local learning service is unavailable. Start the backend on 127.0.0.1:8000, then refresh this page.",
