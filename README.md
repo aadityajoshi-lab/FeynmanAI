@@ -8,6 +8,40 @@ The primary loop is:
 
 Source context and learner state are deliberately separate. Notebook/source memory holds extracted material and anchors; learner memory holds goal state and observable evidence. A course receives only the evidence a learner explicitly shares, and that share can be revoked.
 
+## OpenAI Build Week: how Codex and GPT-5.6 were used
+
+Feynman was built with Codex + GPT-5.6 as an engineering and verification partner, not as an unbounded answer box for learners. We used them to design and implement the typed learning contracts, durable route and evidence state, source-scoped feedback boundaries, Django/Next.js integration, regression tests, and browser-based failure reproduction and repair.
+
+The result is intentionally inspectable: a learner's route advances from an observable attempt, not from a generated explanation or chat history. The application keeps provider credentials server-side, records model/provider provenance when generation is used, and does not forward end-user prompts to Codex desktop authentication. The setup, verification commands, and manual browser smoke flow below make that path repeatable.
+
+## Notebook Source Desk pipeline
+
+The Source Desk turns an explicitly added PDF, pasted text, public webpage, or arXiv reference into notebook-scoped source memory:
+
+```mermaid
+flowchart LR
+    A["PDF / image / document / text / URL / arXiv"] --> B["Validate type, size, signature, and hash"]
+    B --> C["Extract text blocks, tables, and bounded visuals"]
+    C --> D[("Notebook memory: blocks, assets, metadata, anchors")]
+    D --> E{"Learner selects ready sources"}
+    E --> F["Cited chat"]
+    E --> G["Studio outputs"]
+    E --> H["Source-backed activity"]
+    I["Replace or delete a source"] --> J["Rebuild pack and mark dependent claims stale"]
+    J --> D
+```
+
+Uploaded raw bytes and fetched raw HTML are used only for extraction and then discarded. Durable notebook state contains normalized blocks, visual assets, metadata, hashes, and anchors. PDF extraction prefers Mistral OCR when configured and exposes a local fallback when it is not; public URLs are bounded and cleaned, and arXiv `/abs/...` links are normalized to their PDF export. Deleting or replacing a source rebuilds the pack and marks dependent artifacts, chats, curricula, and source-supported evidence stale rather than silently retaining unsupported claims.
+
+## What Feynman supports
+
+- **Sources:** PDF, image, text/Markdown/CSV, Word, PowerPoint, pasted text, public webpages, and arXiv references.
+- **Source-grounded Studio:** study guides, quizzes, slide decks, flashcards, formula sheets, source tables, mind maps, narrated lessons, and cited notebook notes.
+- **Active workbenches:** generic predict/explain/apply/debug/transfer routes plus specialized DSP, Operating Systems, Computer Graphics, AI/ML, historical-source analysis, and academic medical-mechanism activities.
+- **Evidence tools:** source selection, page/block/visual citations, structured attempts, confidence capture, remediation, retry, changed-case transfer, and stale-source invalidation.
+
+These are learning tools, not mastery buttons: a learner's state changes only after an observable attempt is evaluated. Medical activities remain academic and source-cited; financial learning never becomes personalized investment advice.
+
 ## Primary routes
 
 Start at `http://127.0.0.1:3000/` after both services are running.
