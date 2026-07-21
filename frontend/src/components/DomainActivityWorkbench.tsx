@@ -161,6 +161,11 @@ function formatNumber(value: number, digits = 1) {
   return Number.isInteger(value) ? String(value) : value.toFixed(digits);
 }
 
+export function clampRangeValue(value: number, min: number, max: number, step = 1) {
+  const stepped = min + Math.round((value - min) / step) * step;
+  return Math.min(max, Math.max(min, Number(stepped.toFixed(6))));
+}
+
 export function calculateSamplingState(signalFrequency: number, sampleRate: number): SamplingState {
   const nyquistFrequency = sampleRate / 2;
   const wrappedFrequency = ((signalFrequency + nyquistFrequency) % sampleRate + sampleRate) % sampleRate - nyquistFrequency;
@@ -260,12 +265,18 @@ function RangeControl({
   onChange: (value: number) => void;
 }) {
   const helpId = `${id}-help`;
+  const decreaseLabel = `Decrease ${label}`;
+  const increaseLabel = `Increase ${label}`;
   return <div className={styles.rangeControl}>
     <div className={styles.controlHeading}>
       <label htmlFor={id}>{label}</label>
       <output htmlFor={id}>{output}</output>
     </div>
-    <input id={id} type="range" min={min} max={max} step={step} value={value} aria-describedby={help ? helpId : undefined} onChange={(event) => onChange(Number(event.currentTarget.value))} />
+    <div className={styles.rangeInputRow}>
+      <button type="button" className={styles.stepButton} aria-label={decreaseLabel} disabled={value <= min} onClick={() => onChange(clampRangeValue(value - step, min, max, step))}>−</button>
+      <input id={id} type="range" min={min} max={max} step={step} value={value} aria-describedby={help ? helpId : undefined} onChange={(event) => onChange(Number(event.currentTarget.value))} />
+      <button type="button" className={styles.stepButton} aria-label={increaseLabel} disabled={value >= max} onClick={() => onChange(clampRangeValue(value + step, min, max, step))}>+</button>
+    </div>
     {help ? <small id={helpId}>{help}</small> : null}
   </div>;
 }

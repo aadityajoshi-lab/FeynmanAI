@@ -37,6 +37,22 @@ describe("Learning OS API contracts", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("waits for a signed-in tab's first Clerk token instead of falling back to a legacy session", async () => {
+    vi.stubGlobal("document", { documentElement: { dataset: { feynmanAuth: "signed-in" } }, cookie: "" });
+    vi.stubGlobal("fetch", fetchMock.mockResolvedValue(jsonResponse({ user: {}, profile: {} })));
+    let calls = 0;
+    setAuthTokenGetter(async () => {
+      calls += 1;
+      return calls === 1 ? null : "fresh-clerk-session-token";
+    });
+
+    await learningOsApi.me();
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(new Headers(init.headers).get("Authorization")).toBe("Bearer fresh-clerk-session-token");
+    expect(calls).toBeGreaterThan(1);
+  });
+
   it("creates a visible learning contract inside an authenticated workspace", async () => {
     vi.stubGlobal("document", { cookie: "csrftoken=local-csrf-token" });
     vi.stubGlobal("fetch", fetchMock.mockResolvedValue(jsonResponse({ goalId: "goal-1" }, 201)));

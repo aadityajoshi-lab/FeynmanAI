@@ -42,15 +42,23 @@ function NavLink({ item, pathname }: { item: NavItem; pathname: string }) {
   return <Link href={item.href as never} className={`fos-nav-link ${active ? "active" : ""}`} aria-current={active ? "page" : undefined}><FeynmanIcon name={item.icon} /><span>{item.label}</span></Link>;
 }
 
-export function LearningAppShell({ children, title, eyebrow, actions, compact = false }: { children: ReactNode; title?: string; eyebrow?: string; actions?: ReactNode; compact?: boolean }) {
+export function LearningAppShell({ children, title, eyebrow, actions, mobileActions, compact = false }: { children: ReactNode; title?: string; eyebrow?: string; actions?: ReactNode; mobileActions?: ReactNode; compact?: boolean }) {
   const pathname = usePathname();
   const [signingOut, setSigningOut] = useState(false);
   const [isSignedIn, setIsSignedIn] = useState<boolean | null>(null);
   useEffect(() => {
     const sync = (event?: Event) => {
       const detail = (event as CustomEvent<{ isSignedIn?: boolean }> | undefined)?.detail;
-      const next = typeof detail?.isSignedIn === "boolean" ? detail.isSignedIn : document.documentElement.dataset.feynmanAuth === "signed-in";
-      setIsSignedIn(next);
+      if (typeof detail?.isSignedIn === "boolean") {
+        setIsSignedIn(detail.isSignedIn);
+        return;
+      }
+      // A Clerk-backed page starts with an unknown auth marker. Do not flash
+      // a misleading "Sign in" action while Clerk is still hydrating; the
+      // bridge dispatches the authoritative state once `isLoaded` is true.
+      const marker = document.documentElement.dataset.feynmanAuth;
+      if (marker === "signed-in") setIsSignedIn(true);
+      if (marker === "signed-out") setIsSignedIn(false);
     };
     sync();
     window.addEventListener("feynman-auth-state", sync);
@@ -82,6 +90,7 @@ export function LearningAppShell({ children, title, eyebrow, actions, compact = 
       <details key={pathname} className={`fos-mobile-more ${mobileMoreActive ? "active" : ""}`}>
         <summary className="fos-mobile-more-toggle" aria-label="Open course and role navigation"><FeynmanIcon name="panel" /><span>More</span></summary>
         <div className="fos-mobile-more-menu" aria-label="Course and role navigation">
+          {mobileActions ? <div className="fos-mobile-action-slot">{mobileActions}</div> : null}
           {mobileMoreNav.map((item) => {
             const active = isNavItemActive(item, pathname);
             return <Link href={item.href as never} className={`fos-mobile-more-link ${active ? "active" : ""}`} aria-current={active ? "page" : undefined} key={item.label}><FeynmanIcon name={item.icon} /><span>{item.label}</span></Link>;

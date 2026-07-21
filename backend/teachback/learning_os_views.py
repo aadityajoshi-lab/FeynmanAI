@@ -22,7 +22,7 @@ from .adaptive_runtime import (
     normalize_structured_attempt,
 )
 from .curriculum_compiler import CurriculumCompileError, compile_curriculum, curriculum_is_stale
-from .providers import ProviderOutputError, ProviderUnavailable, provider_for
+from .providers import ProviderOutputError, ProviderUnavailable, active_generation_configured, normalize_model_name, provider_for
 from .models import (
     ActivityAttempt,
     CapabilityState,
@@ -51,6 +51,17 @@ def _error(message: str, code: str = "invalid_request", http_status: int = 422) 
 
 def _body(request) -> dict[str, Any]:
     return request.data if isinstance(request.data, dict) else {}
+
+
+def _active_provider_metadata() -> tuple[str, str]:
+    configured = str(getattr(settings, "LLM_PROVIDER", "fixture") or "fixture").casefold()
+    if configured in {"openai", "live_openai"}:
+        return "openai", normalize_model_name(getattr(settings, "OPENAI_MODEL", "gpt-5.6-terra-high"), "gpt-5.6-terra-high")
+    if configured in {"qwen", "live_qwen"}:
+        return "qwen", str(getattr(settings, "FIREWORKS_MODEL", ""))
+    if configured in {"fireworks", "live_fireworks"}:
+        return "fireworks", str(getattr(settings, "FIREWORKS_MODEL", ""))
+    return "local", "deterministic-evidence-v1"
 
 
 def _current_user(request):
@@ -446,7 +457,7 @@ def _activity_provider_feedback(
     confidence: object,
     structured_attempt: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    """Evaluate a real learner response with Fireworks when it is configured.
+    """Evaluate a real learner response with the configured teaching provider.
 
     A missing key is a local deployment configuration, not a fabricated model
     result.  A configured provider failure is returned as a recoverable
@@ -455,17 +466,17 @@ def _activity_provider_feedback(
     """
     source_spans = _activity_feedback_source_spans(goal, profile, selected_source_ids, anchor_ids)
     base = {
-        "provider": "fireworks",
-        "model": settings.FIREWORKS_MODEL,
+        "provider": _active_provider_metadata()[0],
+        "model": _active_provider_metadata()[1],
         "sourceAnchorIds": list(anchor_ids),
     }
-    if not settings.FIREWORKS_API_KEY:
+    if not active_generation_configured():
         return {
             **base,
             "state": "not_configured",
             "providerAttempt": "not_configured",
             "retryAvailable": False,
-            "uncertainty": "No Fireworks provider is configured; source-backed verification used the local evidence threshold.",
+            "uncertainty": "No live teaching provider is configured; source-backed verification used the local evidence threshold.",
         }, None
     if not source_spans:
         return {
@@ -496,7 +507,7 @@ def _activity_provider_feedback(
         "structuredAttempt": structured_attempt or {},
     }
     try:
-        result = provider_for("fireworks").evaluate_checkpoint({
+        result = provider_for().evaluate_checkpoint({
             "manifest": manifest,
             "kind": activity.activity_type,
             "confidence": parsed_confidence,
@@ -536,7 +547,9 @@ def _activity_provider_feedback(
         **base,
         "state": evaluation["state"],
         "providerAttempt": "completed",
-        "providerMode": str(result.get("providerMode") or "live_fireworks"),
+        "providerMode": str(result.get("providerMode") or "live_qwen"),
+        "provider": "fireworks" if result.get("providerMode") == "live_fireworks_fallback" else base["provider"],
+        "model": str(getattr(settings, "FIREWORKS_MODEL", "")) if result.get("providerMode") == "live_fireworks_fallback" else base["model"],
         "retryAvailable": evaluation["nextAction"] == "retry",
         "uncertainty": "Provider requested human review." if evaluation["state"] != "complete" else ("The response may be overconfident." if evaluation["overconfidence"] else ""),
         "evaluation": evaluation,
@@ -657,6 +670,38 @@ def _build_contract(title: str, description: str, outcome: str, current_level: s
         # valid by falling back to the learner's capability title.
         "brief": description or title,
     }
+
+
+def _apply_generated_contract(base: dict[str, Any], generated: object, *, domain: str) -> dict[str, Any]:
+    """Accept only the learner-facing fields the model is allowed to draft."""
+    if not isinstance(generated, dict):
+        raise ProviderOutputError("learning contract generation returned a non-object")
+    prerequisites = generated.get("prerequisites")
+    if not isinstance(prerequisites, list):
+        raise ProviderOutputError("learning contract generation returned invalid prerequisites")
+    # Keep the contract bounded even when a model ignores the requested item
+    # count. Filter unusable entries, then retain the first twelve useful concepts
+    # instead of discarding an otherwise good live draft.
+    normalized_prerequisites = [
+        item.strip() for item in prerequisites
+        if isinstance(item, str) and item.strip() and len(item.strip()) <= 240
+    ][:12]
+    if not normalized_prerequisites:
+        raise ProviderOutputError("learning contract generation returned invalid prerequisites")
+    first_task = generated.get("firstTask")
+    if not isinstance(first_task, str) or not first_task.strip() or len(first_task.strip()) > 1000:
+        raise ProviderOutputError("learning contract generation returned an invalid first task")
+    boundary = personal_decision_boundary(domain, first_task.strip())
+    if boundary:
+        raise ProviderOutputError("learning contract generation crossed the educational boundary")
+    updated = dict(base)
+    updated["prerequisites"] = list(dict.fromkeys(normalized_prerequisites))
+    updated["firstTask"] = first_task.strip()
+    for field, limit in (("intendedCapability", 240), ("brief", 2000), ("confidence", 120)):
+        value = generated.get(field)
+        if isinstance(value, str) and value.strip():
+            updated[field] = value.strip()[:limit]
+    return updated
 
 
 def _apply_contract_overrides(
@@ -1066,6 +1111,57 @@ class CourseSourcePackView(LearningOsAPIView):
             return _error("Every course source must be an approved source pack.", "source_not_approved", 422)
         course.source_packs.set(packs)
         return Response({"sourcePacks": [{"sourcePackId": pack.lesson_id, "title": pack.title, "approved": pack.approved} for pack in packs]})
+
+
+class GoalContractPreviewView(LearningOsAPIView):
+    """Draft a goal-specific contract before the learner confirms it."""
+
+    def post(self, request):
+        profile, error = _require_profile(request)
+        if error:
+            return error
+        body = _body(request)
+        title = str(body.get("title") or "").strip()
+        description = str(body.get("description") or "").strip()
+        outcome = str(body.get("outcome") or "").strip()
+        current_level = str(body.get("currentLevel") or "beginner").strip()
+        time_budget = str(body.get("timeBudget") or "Flexible").strip()
+        if not title or len(title) > 240:
+            return _error("Tell Feynman what you want to learn in 240 characters or fewer.")
+        if current_level not in {"beginner", "intermediate", "advanced"}:
+            return _error("currentLevel must be beginner, intermediate, or advanced.")
+        domain, safety_mode, verification_mode, _ = _classify_goal(title, description)
+        requested_category = _classify_requested_category(body.get("category"), title, description)
+        if requested_category:
+            domain, safety_mode, verification_mode, _ = requested_category
+        base = _build_contract(title, description, outcome, current_level, time_budget, domain, safety_mode, verification_mode)
+        provider_name, provider_model = _active_provider_metadata()
+        try:
+            generated = provider_for().generate_learning_contract({
+                "title": title,
+                "description": description,
+                "outcome": outcome,
+                "currentLevel": current_level,
+                "timeBudget": time_budget,
+                "domain": domain,
+            })
+            contract = _apply_generated_contract(base, generated, domain=domain)
+            provider_mode = str(generated.get("providerMode") or "")
+            if provider_mode == "live_fireworks_fallback":
+                provider_name = "fireworks"
+                provider_model = str(getattr(settings, "FIREWORKS_MODEL", ""))
+            return Response({"contract": contract, "domain": domain, "provider": provider_name, "model": provider_model, "providerMode": provider_mode or None, "generated": True})
+        except (ProviderUnavailable, ProviderOutputError):
+            # The contract remains editable and honest if the model is down;
+            # this fallback is domain-specific and never presented as GPT output.
+            return Response({
+                "contract": base,
+                "domain": domain,
+                "provider": provider_name,
+                "model": provider_model,
+                "generated": False,
+                "providerMessage": "The language model was unavailable, so Feynman prepared a domain-specific starter contract for you to edit.",
+            })
 
 
 class GoalCollectionView(LearningOsAPIView):
@@ -1844,6 +1940,11 @@ class InstitutionDashboardView(LearningOsAPIView):
         workspace = Organization.objects.filter(organization_id=workspace_id).first() if workspace_id else profile.workspace
         if not workspace:
             return _error("Choose a workspace.", "not_found", 404)
+        # A personal learner workspace is intentionally not an institution
+        # governance surface.  Membership ownership of the personal workspace
+        # must not grant access to aggregate institution metrics.
+        if workspace.kind != "institution":
+            return _error("Institution admin access is required.", "forbidden", 403)
         if not _can_manage_organization(_current_user(request), workspace):
             return _error("Institution admin access is required.", "forbidden", 403)
         courses = workspace.courses.all()

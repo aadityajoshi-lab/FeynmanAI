@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildPolicyTrace, buildRoundRobinTrace, calculateSamplingState, resolveGraphicsTopic, resolveOperatingSystemsTopic, resolveWorkbenchDomain } from "./DomainActivityWorkbench";
+import { buildPolicyTrace, buildRoundRobinTrace, calculateSamplingState, clampRangeValue, resolveGraphicsTopic, resolveOperatingSystemsTopic, resolveWorkbenchDomain } from "./DomainActivityWorkbench";
 
 describe("DomainActivityWorkbench calculations", () => {
   it("chooses one adaptive workbench from a goal's domain cues", () => {
@@ -17,6 +17,12 @@ describe("DomainActivityWorkbench calculations", () => {
     expect(sampling).toMatchObject({ nyquistFrequency: 4, aliasFrequency: 1, isAliased: true });
     expect(trace.slices.slice(0, 4).map((slice) => slice.processId)).toEqual(["P1", "P2", "P3", "P1"]);
     expect(trace.averageWaitingTime).toBeCloseTo(5.7, 1);
+  });
+
+  it("clamps bounded control step buttons to their range", () => {
+    expect(clampRangeValue(0, 1, 5)).toBe(1);
+    expect(clampRangeValue(6, 1, 5)).toBe(5);
+    expect(clampRangeValue(1.2, 0, 2, 0.5)).toBe(1);
   });
 
   it("keeps operating-system and graphics topics on the shared canvas", () => {

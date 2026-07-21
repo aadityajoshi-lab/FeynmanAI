@@ -7,9 +7,18 @@ from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 from rest_framework.test import APIClient
 from unittest.mock import patch
 
-from teachback.notebook_media import _rank_sections, _retrieve_chunks, answer_notebook_question, generate_notebook_artifact
+from teachback.notebook_media import _artifact_text, _rank_sections, _retrieve_chunks, answer_notebook_question, generate_notebook_artifact
 from teachback.notebook_pipeline import NotebookExtractionError, _inline_ocr_heading, build_artifact_payload
 from teachback.providers import ProviderOutputError, ProviderUnavailable
+from teachback.web_sources import FetchedReference
+
+
+def test_provider_artifact_text_repairs_duplicate_glyph_output_without_touching_normal_words() -> None:
+    assert _artifact_text("RReeccuurrrreennccee aanndd ccoonnvvoolluuttiioonnss", "quiz option") == "Recurrence and convolutions"
+    assert _artifact_text("Trraananssffoorrmmeerr", "quiz title") == "Transformer"
+    assert _artifact_text("WW hhaatt mmeecchhaanniissmmss ddoeeess tthhee TTrraanassffoorrmmeerr??", "quiz question") == "What mechanisms does the Transformer?"
+    assert _artifact_text("Ooverview", "table title") == "Overview"
+    assert _artifact_text("A book is a useful source.", "normal text") == "A book is a useful source."
 
 
 @pytest.fixture
@@ -46,6 +55,67 @@ def test_notebook_upload_builds_pack_and_artifacts(client: APIClient) -> None:
     assert answer.status_code == 200
     assert "Measurement" in answer.json()["answer"]
     assert len(client.get(f"/api/v1/notebooks/{notebook_id}").json()["chatMessages"]) == 2
+
+
+@pytest.mark.django_db
+def test_url_source_uses_the_explicit_bounded_fetch_contract(client: APIClient) -> None:
+    registered = client.post(
+        "/api/v1/auth/register",
+        {"email": "web-fetch@example.com", "password": "safe-password-123", "displayName": "Web fetch learner"},
+        format="json",
+    )
+    assert registered.status_code == 201
+    created = client.post("/api/v1/notebooks", {"title": "Web source notebook", "learningGoal": "understand", "ocrProvider": "local"}, format="json")
+    notebook_id = created.json()["notebookId"]
+    fetched = FetchedReference(
+        payload=b"# Sampling\n\nSampling maps a continuous signal to discrete observations.",
+        extraction_mime="text/markdown",
+        original_mime="text/html",
+        final_url="https://example.com/sampling",
+        title="Sampling notes",
+        source_kind="web_page",
+        fetched_bytes=128,
+        metadata={"description": "A source-backed sampling overview."},
+        assets=({"type": "image", "mimeType": "image/png", "alt": "Sampled waveform", "dataUrl": "data:image/png;base64,c2FtcGxl"},),
+    )
+
+    with patch("teachback.notebook_views.fetch_reference", return_value=fetched) as fetch:
+        response = client.post(
+            f"/api/v1/notebooks/{notebook_id}/sources/text",
+            {"url": "https://example.com/sampling", "sourceKind": "url_reference", "fetchWebsite": True, "ocrProvider": "auto"},
+            format="json",
+        )
+
+    assert response.status_code == 201
+    fetch.assert_called_once_with("https://example.com/sampling")
+    source = response.json()["sources"][0]
+    assert source["sourceKind"] == "web_page"
+    assert source["extraction"]["fetchWebsite"] is True
+    assert source["extraction"]["fetchedUrl"] == "https://example.com/sampling"
+    assert source["extraction"]["webMetadata"]["description"] == "A source-backed sampling overview."
+    assert source["extraction"]["assetCount"] == 1
+    assert source["assets"][0]["alt"] == "Sampled waveform"
+    assert source["assets"][0]["dataUrl"].startswith("data:image/png;base64,")
+
+
+@pytest.mark.django_db
+def test_url_source_can_decline_fetch_only_when_text_is_supplied(client: APIClient) -> None:
+    registered = client.post(
+        "/api/v1/auth/register",
+        {"email": "url-contract@example.com", "password": "safe-password-123", "displayName": "URL contract learner"},
+        format="json",
+    )
+    assert registered.status_code == 201
+    created = client.post("/api/v1/notebooks", {"title": "URL contract notebook", "learningGoal": "understand", "ocrProvider": "local"}, format="json")
+
+    response = client.post(
+        f"/api/v1/notebooks/{created.json()['notebookId']}/sources/text",
+        {"url": "https://example.com/notes", "sourceKind": "url_reference", "fetchWebsite": False},
+        format="json",
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "source_fetch_required"
 
 
 def test_notebook_provider_fallback_is_explicitly_machine_readable() -> None:

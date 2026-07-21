@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   askNotebook,
@@ -17,6 +18,7 @@ import {
 import { learningOsApi } from "@/lib/learningOsApi";
 import type { LearningActivity, LearningGoal } from "@/lib/learningOsTypes";
 import type { Notebook, NotebookArtifact, NotebookArtifactType, NotebookChatMessage, NotebookNote, NotebookSection, NotebookSource } from "@/lib/notebookTypes";
+import NotebookRichText, { NotebookMath } from "@/components/NotebookRichText";
 
 type CenterView = "proof" | "chat" | "artifact" | "notes";
 type Drawer = "sources" | "studio" | null;
@@ -86,7 +88,7 @@ function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
   }
 }
 
-function sourceMetric(source: NotebookSource, key: "pageCount" | "blockCount" | "assetCount") {
+function sourceMetric(source: NotebookSource, key: "pageCount" | "blockCount" | "assetCount" | "diagramCount") {
   return Number(source.extraction?.[key] || 0);
 }
 
@@ -114,6 +116,8 @@ export default function NotebookWorkspace({ notebookId }: { notebookId: string }
   const [retrySource, setRetrySource] = useState<NotebookSource | null>(null);
   const [noteDraft, setNoteDraft] = useState({ title: "", content: "", sourceIds: [] as string[], sourceAnchorIds: [] as string[] });
   const [editingNote, setEditingNote] = useState<NotebookNote | null>(null);
+  const [confirmingDeleteNote, setConfirmingDeleteNote] = useState<NotebookNote | null>(null);
+  const [confirmingDeleteSource, setConfirmingDeleteSource] = useState<NotebookSource | null>(null);
   const [proofGoal, setProofGoal] = useState<LearningGoal | null>(null);
   const [proofResponse, setProofResponse] = useState("");
   const [proofConclusion, setProofConclusion] = useState("");
@@ -229,14 +233,19 @@ export default function NotebookWorkspace({ notebookId }: { notebookId: string }
     if (retry) void retrySourceExtraction(retry, files);
   }
 
+  function requestRemoveSource(source: NotebookSource) {
+    setConfirmingDeleteSource(source);
+  }
+
   async function removeSource(source: NotebookSource) {
-    if (!notebook || !window.confirm(`Remove ${source.title}? Its extracted context will be removed from this notebook.`)) return;
+    if (!notebook) return;
     setBusy(`source-${source.sourceId}`); setError("");
     try {
       const next = await deleteNotebookSource(notebookId, source.sourceId);
       setNotebook(next);
       setSelectedSourceIds((current) => current.filter((id) => id !== source.sourceId));
       if (activeArtifact?.sourceIds.includes(source.sourceId)) setActiveArtifact(null);
+      setConfirmingDeleteSource(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The source could not be removed.");
     } finally { setBusy(null); }
@@ -246,17 +255,34 @@ export default function NotebookWorkspace({ notebookId }: { notebookId: string }
     event?.preventDefault();
     const asked = (questionOverride ?? question).trim();
     if (!asked || !canUseSources || !notebook) return;
+    const existingOptimistic = questionOverride
+      ? [...notebook.chatMessages].reverse().find((message) => message.role === "user" && message.content === asked && (message.status === "pending" || message.status === "failed"))
+      : undefined;
+    const optimisticId = existingOptimistic?.messageId || (typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `pending-${Date.now()}`);
+    const optimisticUser: NotebookChatMessage = existingOptimistic
+      ? { ...existingOptimistic, status: "pending" }
+      : { messageId: optimisticId, role: "user", content: asked, sourceIds: [...selectedSourceIds], sourceAnchorIds: [], status: "pending", createdAt: new Date().toISOString() };
+    setNotebook((current) => {
+      if (!current) return current;
+      const withoutExisting = current.chatMessages.filter((message) => message.messageId !== optimisticId);
+      return { ...current, chatMessages: [...withoutExisting, optimisticUser] };
+    });
+    setQuestion("");
+    setCenterView("chat");
     setBusy("ask"); setError(""); setProviderNotice(""); setRetryableQuestionError("");
     setRetryQuestion(asked);
     try {
       const result = await askNotebook(notebookId, asked, selectedSourceIds);
-      setNotebook((current) => current ? { ...current, chatMessages: [...current.chatMessages, result.messages.user, result.messages.assistant] } : current);
+      setNotebook((current) => {
+        if (!current) return current;
+        const withoutOptimistic = current.chatMessages.filter((message) => message.messageId !== optimisticId);
+        return { ...current, chatMessages: [...withoutOptimistic, result.messages.user, result.messages.assistant] };
+      });
       if (result.degraded || result.providerUnavailable) setProviderNotice(result.providerMessage || "Feynman used a source-bounded fallback because the answer provider is temporarily unavailable. Citations still point only to your selected sources; retry the question later for a generated explanation.");
       else setRetryQuestion("");
-      setQuestion("");
-      setCenterView("chat");
     } catch (caught) {
       const failure = caught instanceof Error ? caught.message : "The notebook could not answer that question.";
+      setNotebook((current) => current ? { ...current, chatMessages: current.chatMessages.map((message) => message.messageId === optimisticId ? { ...message, status: "failed" } : message) } : current);
       setError(failure); setRetryableQuestionError(failure);
     } finally { setBusy(null); }
   }
@@ -350,13 +376,17 @@ export default function NotebookWorkspace({ notebookId }: { notebookId: string }
     } finally { setBusy(null); }
   }
 
+  function requestRemoveNote(note: NotebookNote) {
+    setConfirmingDeleteNote(note);
+  }
+
   async function removeNote(note: NotebookNote) {
-    if (!window.confirm(`Delete “${note.title}”?`)) return;
     setBusy(`note-${note.noteId}`); setError("");
     try {
       await deleteNotebookNote(notebookId, note.noteId);
       setNotebook((current) => current ? { ...current, notes: current.notes.filter((item) => item.noteId !== note.noteId) } : current);
       if (editingNote?.noteId === note.noteId) openNewNote();
+      setConfirmingDeleteNote(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The note could not be deleted.");
     } finally { setBusy(null); }
@@ -371,7 +401,7 @@ export default function NotebookWorkspace({ notebookId }: { notebookId: string }
         <div className="nlm-title"><strong>{notebook.title}</strong><span>{activeSources.length} of {groundingReadySources.length || 0} sources active · SOURCE → PROOF → EVIDENCE</span></div>
       <div className="nlm-top-actions">
         <button type="button" className="nlm-top-quiet" onClick={() => openNewNote()}><Icon name="note" size={15} /> Notes</button>
-        <Link href="/sources" className="nlm-create-button"><Icon name="add" size={16} /> Add source</Link>
+        <Link href={`/sources?notebook=${encodeURIComponent(notebookId)}`} className="nlm-create-button"><Icon name="add" size={16} /> Add source</Link>
       </div>
       <div className="nlm-mobile-actions"><button type="button" onClick={() => setDrawer(drawer === "sources" ? null : "sources")} aria-expanded={drawer === "sources"}><Icon name="panel" /></button><button type="button" onClick={() => setDrawer(drawer === "studio" ? null : "studio")} aria-expanded={drawer === "studio"}><Icon name="spark" /></button></div>
     </header>
@@ -383,11 +413,11 @@ export default function NotebookWorkspace({ notebookId }: { notebookId: string }
         <div className="nlm-sources-body">
           <input ref={fileInputRef} type="file" accept={ACCEPTED_FILES} multiple hidden onChange={(event) => void uploadFiles(event.target.files)} />
           <input ref={retryFileInputRef} type="file" accept={ACCEPTED_FILES} hidden onChange={(event) => handleRetryFileSelection(event.target.files)} />
-          <button type="button" className="nlm-add-source" onClick={() => fileInputRef.current?.click()} disabled={busy === "upload"}><Icon name={busy === "upload" ? "more" : "add"} /> {busy === "upload" ? "Processing source…" : "Add sources"}</button>
+          <div className="nlm-source-actions"><Link href={`/sources?notebook=${encodeURIComponent(notebookId)}`} className="nlm-add-source"><Icon name="add" /> Add source</Link><button type="button" className="nlm-add-source" onClick={() => fileInputRef.current?.click()} disabled={busy === "upload"}><Icon name={busy === "upload" ? "more" : "upload"} /> {busy === "upload" ? "Processing source…" : "Upload file"}</button></div>
           <div className="nlm-source-context"><span><span className="nlm-memory-dot" /> Notebook memory</span><p>PDF text, visuals, and page anchors are stored with this notebook. Original files are not retained.</p></div>
           {groundingReadySources.length > 1 && <div className="nlm-select-all"><button type="button" onClick={selectAllSources}>Select all</button><span>{selectedSourceIds.length} active</span></div>}
           <div className="nlm-source-list">
-            {notebook.sources.length ? notebook.sources.map((source) => <GroundingSourceRow key={source.sourceId} source={source} selected={selectedSourceIds.includes(source.sourceId)} busy={busy === `source-${source.sourceId}` || busy === `retry-${source.sourceId}`} onToggle={() => toggleSource(source.sourceId)} onDelete={() => void removeSource(source)} onRetry={() => openSourceRetry(source)} />) : <EmptySources onAdd={openSourcePicker} />}
+            {notebook.sources.length ? notebook.sources.map((source) => <GroundingSourceRow key={source.sourceId} source={source} selected={selectedSourceIds.includes(source.sourceId)} busy={busy === `source-${source.sourceId}` || busy === `retry-${source.sourceId}`} confirming={confirmingDeleteSource?.sourceId === source.sourceId} onToggle={() => toggleSource(source.sourceId)} onDelete={() => requestRemoveSource(source)} onCancelDelete={() => setConfirmingDeleteSource(null)} onConfirmDelete={() => void removeSource(source)} onRetry={() => openSourceRetry(source)} />) : <EmptySources onAdd={openSourcePicker} />}
           </div>
         </div>
       </aside>
@@ -408,7 +438,7 @@ export default function NotebookWorkspace({ notebookId }: { notebookId: string }
         {centerView === "chat" && <ChatCanvas messages={messages} activeSources={activeSources} question={question} busy={busy === "ask"} canUseSources={canUseSources} onQuestion={onQuestion => setQuestion(onQuestion)} onSubmit={submitQuestion} onPrompt={setQuestion} onSaveMessage={openNewNote} />}
         {centerView === "artifact" && activeArtifact && <ArtifactCanvas artifact={activeArtifact} pack={notebook.knowledgePack} onBack={() => setCenterView("proof")} />}
         {centerView === "artifact" && !activeArtifact && <EmptyArtifact onBack={() => setCenterView("proof")} />}
-        {centerView === "notes" && <NotesCanvas notes={notes} draft={noteDraft} editing={editingNote} busy={busy === "note"} onDraft={setNoteDraft} onSave={() => void saveNote()} onNew={() => openNewNote()} onOpen={openExistingNote} onDelete={(note) => void removeNote(note)} />}
+        {centerView === "notes" && <NotesCanvas notes={notes} draft={noteDraft} editing={editingNote} busy={busy === "note"} confirmingDelete={confirmingDeleteNote} onDraft={setNoteDraft} onSave={() => void saveNote()} onNew={() => openNewNote()} onOpen={openExistingNote} onDelete={requestRemoveNote} onCancelDelete={() => setConfirmingDeleteNote(null)} onConfirmDelete={(note) => void removeNote(note)} />}
       </section>
 
       <aside className="nlm-panel nlm-studio" data-open={drawer === "studio"}>
@@ -444,13 +474,13 @@ function EmptySources({ onAdd }: { onAdd: () => void }) {
   return <div className="nlm-empty-sources"><span><Icon name="upload" size={25} /></span><strong>Add your first source</strong><p>Upload a PDF, note, or slide deck to create this notebook’s saved context.</p><button type="button" onClick={onAdd}>Choose a file</button></div>;
 }
 
-function GroundingSourceRow({ source, selected, busy, onToggle, onDelete, onRetry }: { source: NotebookSource; selected: boolean; busy: boolean; onToggle: () => void; onDelete: () => void; onRetry: () => void }) {
+function GroundingSourceRow({ source, selected, busy, confirming, onToggle, onDelete, onCancelDelete, onConfirmDelete, onRetry }: { source: NotebookSource; selected: boolean; busy: boolean; confirming: boolean; onToggle: () => void; onDelete: () => void; onCancelDelete: () => void; onConfirmDelete: () => void; onRetry: () => void }) {
   const ready = source.status === "ready";
   const failed = source.status === "failed";
   const selectable = ready && source.groundingEnabled !== false;
   return <article className={`nlm-source-row ${selected ? "selected" : ""} ${!ready ? "pending" : ""} ${!selectable && ready ? "view-only" : ""}`}>
-    <label><input type="checkbox" checked={selected} disabled={!selectable} onChange={onToggle} aria-label={selectable ? `Use ${source.title} as context` : `${source.title} is view-only and excluded from grounded answers`} /><span className="nlm-source-file"><Icon name="file" size={17} /></span><span className="nlm-source-copy"><strong>{source.title}</strong><small>{!ready ? failed ? "Extraction failed. Choose the file again to retry." : "Extracting..." : !selectable ? "View-only - excluded from grounded answers" : `${sourceMetric(source, "pageCount")} pages / ${sourceMetric(source, "blockCount")} blocks`}</small></span></label>
-    <div className="nlm-source-row-actions">{failed && source.retryAvailable !== false ? <button type="button" className="nlm-source-retry" disabled={busy} onClick={onRetry}>{busy ? "Retrying..." : "Retry extraction"}</button> : null}<button type="button" className="nlm-source-delete" disabled={busy} aria-label={`Remove ${source.title}`} onClick={onDelete}>{busy ? <Icon name="more" size={15} /> : <Icon name="delete" size={15} />}</button></div>
+    <label><input type="checkbox" checked={selected} disabled={!selectable} onChange={onToggle} aria-label={selectable ? `Use ${source.title} as context` : `${source.title} is view-only and excluded from grounded answers`} /><span className="nlm-source-file"><Icon name="file" size={17} /></span><span className="nlm-source-copy"><strong>{source.title}</strong><small>{!ready ? failed ? "Extraction failed. Choose the file again to retry." : "Extracting..." : !selectable ? "View-only - excluded from grounded answers" : `${sourceMetric(source, "pageCount")} pages / ${sourceMetric(source, "blockCount")} blocks${sourceMetric(source, "assetCount") ? ` / ${sourceMetric(source, "assetCount")} visuals` : ""}${sourceMetric(source, "diagramCount") ? ` / ${sourceMetric(source, "diagramCount")} diagrams` : ""}`}</small></span></label>
+    <div className="nlm-source-row-actions">{failed && source.retryAvailable !== false ? <button type="button" className="nlm-source-retry" disabled={busy} onClick={onRetry}>{busy ? "Retrying..." : "Retry extraction"}</button> : null}{confirming ? <div className="nlm-source-confirm" role="group" aria-label={`Confirm remove ${source.title}`}><span>Remove source?</span><button type="button" onClick={onCancelDelete} disabled={busy}>Cancel</button><button type="button" onClick={onConfirmDelete} disabled={busy}>{busy ? "Removing..." : "Confirm remove"}</button></div> : <button type="button" className="nlm-source-delete" disabled={busy} aria-label={`Remove ${source.title}`} onClick={onDelete}>{busy ? <Icon name="more" size={15} /> : <Icon name="delete" size={15} />}</button>}</div>
   </article>;
 }
 
@@ -458,7 +488,7 @@ function SourceRow({ source, selected, busy, onToggle, onDelete }: { source: Not
   const ready = source.status === "ready";
   const groundingExcluded = ready && source.groundingEnabled === false;
   return <article className={`nlm-source-row ${selected ? "selected" : ""} ${!ready ? "pending" : ""} ${groundingExcluded ? "view-only" : ""}`}>
-    <label><input type="checkbox" checked={selected} disabled={!ready} onChange={onToggle} aria-label={`Use ${source.title} as context`} /><span className="nlm-source-file"><Icon name="file" size={17} /></span><span className="nlm-source-copy"><strong>{source.title}</strong><small>{ready ? `${sourceMetric(source, "pageCount")} pages · ${sourceMetric(source, "blockCount")} blocks` : source.status === "failed" ? "Extraction failed" : "Extracting…"}</small></span></label>
+    <label><input type="checkbox" checked={selected} disabled={!ready} onChange={onToggle} aria-label={`Use ${source.title} as context`} /><span className="nlm-source-file"><Icon name="file" size={17} /></span><span className="nlm-source-copy"><strong>{source.title}</strong><small>{ready ? `${sourceMetric(source, "pageCount")} pages · ${sourceMetric(source, "blockCount")} blocks${sourceMetric(source, "assetCount") ? ` · ${sourceMetric(source, "assetCount")} visuals` : ""}` : source.status === "failed" ? "Extraction failed" : "Extracting…"}</small></span></label>
     <button type="button" className="nlm-source-delete" disabled={busy} aria-label={`Remove ${source.title}`} onClick={onDelete}>{busy ? <Icon name="more" size={15} /> : <Icon name="delete" size={15} />}</button>
   </article>;
 }
@@ -476,7 +506,7 @@ function ChatCanvas({ messages, activeSources, question, busy, canUseSources, on
   return <div className="nlm-chat-canvas">
     <div className="nlm-chat-scroll">
       {!messages.length && <div className="nlm-chat-welcome"><div className="nlm-welcome-orb"><Icon name="spark" size={26} /></div><h1>What would you like to understand?</h1><p>Ask about your selected sources. Every answer stays tied to the page-aware memory saved in this notebook.</p><div className="nlm-prompt-grid">{prompts.map((prompt) => <button type="button" key={prompt} onClick={() => onPrompt(prompt)}>{prompt}<Icon name="chevron" size={15} /></button>)}</div></div>}
-      {messages.map((message) => <article className={`nlm-message ${message.role} ${message.status === "stale" ? "stale" : ""}`} key={message.messageId}><div className="nlm-message-avatar">{message.role === "assistant" ? <Icon name="spark" size={15} /> : "You"}</div><div className="nlm-message-content"><p>{message.content}</p>{message.status === "stale" ? <small className="nlm-stale-chip">A cited source was removed</small> : null}{message.role === "assistant" && <><CitationChips anchors={message.sourceAnchorIds} sourceIds={message.sourceIds} /><div className="nlm-message-actions"><button type="button" onClick={() => onSaveMessage(message)}><Icon name="note" size={14} /> Save to note</button><span>{message.groundedIn === "notebook" || !message.groundedIn ? "Source-grounded" : message.groundedIn}</span></div></>}</div></article>)}
+      {messages.map((message) => <article className={`nlm-message ${message.role} ${message.status === "stale" ? "stale" : ""} ${message.status === "pending" ? "pending" : ""} ${message.status === "failed" ? "failed" : ""}`} key={message.messageId}><div className="nlm-message-avatar">{message.role === "assistant" ? <Icon name="spark" size={15} /> : "You"}</div><div className="nlm-message-content"><NotebookRichText content={message.content} />{message.status === "stale" ? <small className="nlm-stale-chip">A cited source was removed</small> : null}{message.status === "pending" ? <small className="nlm-message-status">Sending…</small> : null}{message.status === "failed" ? <small className="nlm-message-status">Not sent · use Retry question above</small> : null}{message.role === "assistant" && <><CitationChips anchors={message.sourceAnchorIds} sourceIds={message.sourceIds} /><div className="nlm-message-actions"><button type="button" onClick={() => onSaveMessage(message)}><Icon name="note" size={14} /> Save to note</button><span>{message.groundedIn === "notebook" || !message.groundedIn ? "Source-grounded" : message.groundedIn}</span></div></>}</div></article>)}
       {busy && <article className="nlm-message assistant thinking"><div className="nlm-message-avatar"><Icon name="spark" size={15} /></div><div className="nlm-typing"><i /><i /><i /></div></article>}
     </div>
     <form className="nlm-composer" onSubmit={onSubmit}><textarea value={question} onChange={(event) => onQuestion(event.target.value)} placeholder={canUseSources ? "Start typing…" : "Select at least one processed source first"} rows={2} disabled={!canUseSources || busy} /><div><span>{activeSources.length} source{activeSources.length === 1 ? "" : "s"} selected</span><button type="submit" disabled={!question.trim() || !canUseSources || busy} aria-label="Send question"><Icon name="send" size={19} /></button></div></form>
@@ -532,12 +562,12 @@ function SlidesArtifact({ payload, pack }: { payload: Record<string, any>; pack:
   const slide = slides[index];
   if (!slide) return <p className="nlm-artifact-empty">No slide sequence could be created from the selected sources.</p>;
   const assets = (slide.assetIds || []).map((id: string) => (payload.assets || pack.assets || []).find((asset: any) => asset.assetId === id)).filter(Boolean);
-  return <div className="nlm-slide"><span className="nlm-slide-count">SLIDE {String(index + 1).padStart(2, "0")} / {String(slides.length).padStart(2, "0")}</span><div className="nlm-slide-layout"><div><span className="nlm-kicker">{slide.slideLabel || "KEY IDEA"}</span><h2>{slide.title}</h2><p>{slide.body}</p>{slide.bullets?.length ? <ul>{slide.bullets.map((bullet: string) => <li key={bullet}>{bullet}</li>)}</ul> : null}<CitationChips anchors={slide.sourceAnchors || []} sourceIds={slide.sourceIds || []} /></div>{assets.length ? <div className="nlm-slide-visual">{assets.slice(0, 1).map((asset: any) => <figure key={asset.assetId}><img src={asset.dataUrl || asset.url} alt={asset.alt || "Source visual"} /><figcaption>{asset.alt || "Source visual"}{asset.page ? ` · p. ${asset.page}` : ""}</figcaption></figure>)}</div> : slide.diagram?.nodes?.length ? <MiniDiagram diagram={slide.diagram} /> : <div className="nlm-slide-placeholder"><Icon name="mind" size={30} /><span>{slide.visualHint || "Source-backed idea"}</span></div>}</div><div className="nlm-artifact-nav"><button type="button" onClick={() => setIndex((value) => Math.max(0, value - 1))} disabled={index === 0}>Previous slide</button><button type="button" onClick={() => setIndex((value) => Math.min(slides.length - 1, value + 1))} disabled={index === slides.length - 1}>Next slide</button></div></div>;
+  return <div className="nlm-slide"><span className="nlm-slide-count">SLIDE {String(index + 1).padStart(2, "0")} / {String(slides.length).padStart(2, "0")}</span><div className="nlm-slide-layout"><div><span className="nlm-kicker">{slide.slideLabel || "KEY IDEA"}</span><h2>{slide.title}</h2><p>{slide.body}</p>{slide.bullets?.length ? <ul>{slide.bullets.map((bullet: string) => <li key={bullet}>{bullet}</li>)}</ul> : null}<CitationChips anchors={slide.sourceAnchors || []} sourceIds={slide.sourceIds || []} /></div>{assets.length ? <div className="nlm-slide-visual">{assets.slice(0, 1).map((asset: any) => <figure key={asset.assetId}><Image unoptimized width={960} height={540} style={{ width: "100%", height: "auto" }} src={asset.dataUrl || asset.url} alt={asset.alt || "Source visual"} /><figcaption>{asset.alt || "Source visual"}{asset.page ? ` · p. ${asset.page}` : ""}</figcaption></figure>)}</div> : slide.diagram?.nodes?.length ? <MiniDiagram diagram={slide.diagram} /> : <div className="nlm-slide-placeholder"><Icon name="mind" size={30} /><span>{slide.visualHint || "Source-backed idea"}</span></div>}</div><div className="nlm-artifact-nav"><button type="button" onClick={() => setIndex((value) => Math.max(0, value - 1))} disabled={index === 0}>Previous slide</button><button type="button" onClick={() => setIndex((value) => Math.min(slides.length - 1, value + 1))} disabled={index === slides.length - 1}>Next slide</button></div></div>;
 }
 
 function FormulaArtifact({ payload }: { payload: Record<string, any> }) {
   const formulas = payload.formulas || [];
-  return <div className="nlm-formula-list">{formulas.length ? formulas.map((formula: any) => <article key={formula.formulaId || formula.text}><strong>{formula.text}</strong><span>{formula.sourceId}{formula.page ? ` · page ${formula.page}` : ""}</span></article>) : <p className="nlm-artifact-empty">No equation-like source text was detected in the selected sources.</p>}</div>;
+  return <div className="nlm-formula-list">{formulas.length ? formulas.map((formula: any) => <article key={formula.formulaId || formula.text}><NotebookMath expression={formula.text} display /><span>{formula.sourceId}{formula.page ? ` · page ${formula.page}` : ""}</span></article>) : <p className="nlm-artifact-empty">No equation-like source text was detected in the selected sources.</p>}</div>;
 }
 
 function TableArtifact({ payload }: { payload: Record<string, any> }) {
@@ -591,6 +621,6 @@ function LessonArtifact({ payload }: { payload: Record<string, any> }) {
   return <div className="nlm-lesson"><div className="nlm-lesson-stage"><span className="nlm-kicker">SCENE {index + 1} · NARRATED LESSON</span><h2>{slide.title}</h2><p>{slide.body}</p>{slide.bullets?.length ? <ul>{slide.bullets.map((bullet: string) => <li key={bullet}>{bullet}</li>)}</ul> : null}<CitationChips anchors={slide.sourceAnchorIds || slide.sourceAnchors || []} sourceIds={payload.sourceIds || []} /></div><div className="nlm-artifact-nav"><button type="button" onClick={() => setIndex((value) => Math.max(0, value - 1))} disabled={index === 0}>Previous scene</button><button type="button" className="nlm-play" onClick={toggleNarration}><Icon name="audio" size={16} /> {playing ? "Pause narration" : "Play narration"}</button><button type="button" onClick={() => setIndex((value) => Math.min(slides.length - 1, value + 1))} disabled={index === slides.length - 1}>Next scene</button></div></div>;
 }
 
-function NotesCanvas({ notes, draft, editing, busy, onDraft, onSave, onNew, onOpen, onDelete }: { notes: NotebookNote[]; draft: { title: string; content: string; sourceIds: string[]; sourceAnchorIds: string[] }; editing: NotebookNote | null; busy: boolean; onDraft: (value: { title: string; content: string; sourceIds: string[]; sourceAnchorIds: string[] }) => void; onSave: () => void; onNew: () => void; onOpen: (note: NotebookNote) => void; onDelete: (note: NotebookNote) => void }) {
-  return <div className="nlm-notes-canvas"><aside><div><span className="nlm-kicker">YOUR NOTES</span><button type="button" onClick={onNew}><Icon name="add" size={15} /> New note</button></div><div className="nlm-note-list">{notes.length ? notes.map((note) => <article className={editing?.noteId === note.noteId ? "active" : ""} key={note.noteId}><button type="button" onClick={() => onOpen(note)}><strong>{note.title}</strong><small>{shortDate(note.updatedAt)} · {note.sourceIds.length ? `${note.sourceIds.length} sources` : "personal"}</small></button><button type="button" aria-label={`Delete ${note.title}`} onClick={() => onDelete(note)}><Icon name="delete" size={14} /></button></article>) : <p>No saved notes yet.</p>}</div></aside><section><span className="nlm-kicker">{editing ? "EDIT NOTE" : "NEW NOTE"}</span><input value={draft.title} onChange={(event) => onDraft({ ...draft, title: event.target.value })} placeholder="Note title" maxLength={240} /><textarea value={draft.content} onChange={(event) => onDraft({ ...draft, content: event.target.value })} placeholder="Write what you want to remember…" rows={12} maxLength={12000} /><div className="nlm-note-footer"><CitationChips anchors={draft.sourceAnchorIds} sourceIds={draft.sourceIds} /><button type="button" onClick={onSave} disabled={!draft.content.trim() || busy}>{busy ? "Saving…" : editing ? "Save changes" : "Save note"}</button></div></section></div>;
+function NotesCanvas({ notes, draft, editing, busy, confirmingDelete, onDraft, onSave, onNew, onOpen, onDelete, onCancelDelete, onConfirmDelete }: { notes: NotebookNote[]; draft: { title: string; content: string; sourceIds: string[]; sourceAnchorIds: string[] }; editing: NotebookNote | null; busy: boolean; confirmingDelete: NotebookNote | null; onDraft: (value: { title: string; content: string; sourceIds: string[]; sourceAnchorIds: string[] }) => void; onSave: () => void; onNew: () => void; onOpen: (note: NotebookNote) => void; onDelete: (note: NotebookNote) => void; onCancelDelete: () => void; onConfirmDelete: (note: NotebookNote) => void }) {
+  return <div className="nlm-notes-canvas"><aside><div><span className="nlm-kicker">YOUR NOTES</span><button type="button" onClick={onNew}><Icon name="add" size={15} /> New note</button></div><div className="nlm-note-list">{notes.length ? notes.map((note) => <article className={editing?.noteId === note.noteId ? "active" : ""} key={note.noteId}><button type="button" onClick={() => onOpen(note)}><strong>{note.title}</strong><small>{shortDate(note.updatedAt)} · {note.sourceIds.length ? `${note.sourceIds.length} sources` : "personal"}</small></button>{confirmingDelete?.noteId === note.noteId ? <div className="nlm-note-confirm" role="group" aria-label={`Confirm delete ${note.title}`}><span>Delete?</span><button type="button" onClick={onCancelDelete}>Cancel</button><button type="button" onClick={() => onConfirmDelete(note)} disabled={busy}>Confirm delete</button></div> : <button type="button" aria-label={`Delete ${note.title}`} onClick={() => onDelete(note)}><Icon name="delete" size={14} /></button>}</article>) : <p>No saved notes yet.</p>}</div></aside><section><span className="nlm-kicker">{editing ? "EDIT NOTE" : "NEW NOTE"}</span><input value={draft.title} onChange={(event) => onDraft({ ...draft, title: event.target.value })} placeholder="Note title" maxLength={240} /><textarea value={draft.content} onChange={(event) => onDraft({ ...draft, content: event.target.value })} placeholder="Write what you want to remember…" rows={12} maxLength={12000} /><div className="nlm-note-footer"><CitationChips anchors={draft.sourceAnchorIds} sourceIds={draft.sourceIds} /><button type="button" onClick={onSave} disabled={!draft.content.trim() || busy}>{busy ? "Saving…" : editing ? "Save changes" : "Save note"}</button></div></section></div>;
 }

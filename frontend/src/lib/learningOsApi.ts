@@ -55,7 +55,7 @@ let csrfBootstrap: Promise<void> | null = null;
 let authBootstrapWait: Promise<void> | null = null;
 
 async function waitForAuthBridge(timeoutMs = 3500) {
-  if (authTokenGetter || typeof window === "undefined" || typeof document === "undefined" || document.documentElement?.dataset.feynmanAuth) return;
+  if (typeof window === "undefined" || typeof document === "undefined" || document.documentElement?.dataset.feynmanAuth) return;
   if (!authBootstrapWait) {
     authBootstrapWait = new Promise<void>((resolve) => {
       let settled = false;
@@ -70,6 +70,25 @@ async function waitForAuthBridge(timeoutMs = 3500) {
     }).finally(() => { authBootstrapWait = null; });
   }
   await authBootstrapWait;
+}
+
+/**
+ * Clerk can publish its signed-in marker a few milliseconds before its first
+ * session token is available on a brand-new tab.  Never let that transient
+ * null token fall through to the legacy session: doing so can resolve /me for
+ * one account and the following goal lookup for another account.  A short,
+ * bounded retry keeps the stable Clerk subject on both requests without
+ * delaying signed-out or legacy-session callers.
+ */
+async function freshAuthToken(): Promise<string | null> {
+  let token = await getAuthToken();
+  if (token || typeof document === "undefined" || document.documentElement?.dataset.feynmanAuth !== "signed-in") return token;
+  for (const delayMs of [40, 80, 160, 320, 640, 1000]) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    token = await getAuthToken();
+    if (token) return token;
+  }
+  return token;
 }
 
 async function ensureCsrfToken() {
@@ -99,7 +118,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     if (unsafe && !token && csrf && !requestHeaders.has("X-CSRFToken")) requestHeaders.set("X-CSRFToken", csrf);
     return fetch(`${API_BASE}${path}`, { ...init, headers: requestHeaders, credentials: "include" });
   };
-  let token = await getAuthToken();
+  let token = await freshAuthToken();
   let response: Response;
   try {
     response = await send(token);
@@ -187,6 +206,9 @@ export const learningOsApi = {
   },
   goals() {
     return request<{ goals: LearningGoal[] }>("/goals");
+  },
+  previewGoalContract(input: { title: string; description?: string; outcome?: string; currentLevel: string; timeBudget?: string; category?: string }) {
+    return request<{ contract: LearningContract; domain: string; provider: string; model?: string; providerMode?: string | null; generated: boolean; providerMessage?: string }>("/goals/contract-preview", json("POST", input));
   },
   createGoal(input: { title: string; description: string; outcome: string; currentLevel: string; timeBudget: string; category?: string; courseId?: string; contract?: Partial<LearningContract> }) {
     return request<LearningGoal>("/goals", json("POST", input));

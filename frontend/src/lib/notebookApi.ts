@@ -1,5 +1,5 @@
 import type { Notebook, NotebookArtifact, NotebookArtifactType, NotebookChatMessage, NotebookListItem, NotebookNote } from "./notebookTypes";
-import { getAuthToken } from "./learningOsApi";
+import { getAuthToken, LearningOsApiError } from "./learningOsApi";
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL || "http://127.0.0.1:8000/api/v1").replace(/\/$/, "");
 
@@ -33,7 +33,7 @@ async function notebookFetch(path: string, init: RequestInit = {}) {
     if (unsafe && !authToken && token && !headers.has("X-CSRFToken")) headers.set("X-CSRFToken", token);
     return await fetch(path, { ...init, headers, credentials: "include" });
   } catch {
-    throw new Error("Feynman's local source service is unavailable. Start the backend on 127.0.0.1:8000, then refresh this page.");
+    throw new LearningOsApiError("Feynman's local source service is unavailable. Start the backend on 127.0.0.1:8000, then refresh this page.", 0, "service_unavailable");
   }
 }
 
@@ -45,7 +45,7 @@ async function parseError(response: Response, fallback: string) {
 }
 
 async function json<T>(response: Response, fallback: string): Promise<T> {
-  if (!response.ok) throw new Error(await parseError(response, fallback));
+  if (!response.ok) throw new LearningOsApiError(await parseError(response, fallback), response.status);
   return response.json() as Promise<T>;
 }
 
@@ -80,7 +80,7 @@ export async function retryNotebookSource(notebookId: string, sourceId: string, 
   return json<Notebook>(await notebookFetch(`${API_BASE}/notebooks/${notebookId}/sources/${sourceId}/retry`, { method: "POST", body }), "Source extraction retry failed");
 }
 
-export async function addNotebookTextSource(notebookId: string, input: { text?: string; url?: string; title?: string; sourceKind?: "pasted_notes" | "typed_text" | "url_reference" | "reference"; useForGrounding?: boolean }): Promise<Notebook> {
+export async function addNotebookTextSource(notebookId: string, input: { text?: string; url?: string; title?: string; sourceKind?: "pasted_notes" | "typed_text" | "url_reference" | "reference"; useForGrounding?: boolean; fetchWebsite?: boolean; ocrProvider?: "auto" | "local" | "mistral" }): Promise<Notebook> {
   return json<Notebook>(await notebookFetch(`${API_BASE}/notebooks/${notebookId}/sources/text`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

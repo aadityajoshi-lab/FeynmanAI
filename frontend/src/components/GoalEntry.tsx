@@ -6,13 +6,28 @@ import { FormEvent, useEffect, useState } from "react";
 import { useSignIn, useSignUp } from "@clerk/nextjs";
 import { FeynmanIcon, LearningAppShell, StatusPill } from "./LearningAppShell";
 import { isAuthenticationError, learningOsApi } from "@/lib/learningOsApi";
-import type { PendingGoal } from "@/lib/learningOsTypes";
+import type { LearningContract, PendingGoal } from "@/lib/learningOsTypes";
 
 const PENDING_GOAL_KEY = "feynman.pendingGoal";
 
 const examples = ["Understand operating-system scheduling", "Learn DSP well enough to design a filter", "Explain machine learning models clearly", "Study anatomy from my own notes"];
 
 type StarterRoute = { key: string; domain: string; title: string; outcome: string; sourceRequired?: boolean };
+
+type SignInSecondFactorStrategy = "email_code" | "phone_code" | "totp" | "backup_code";
+type SignInSecondFactorOption = {
+  strategy: SignInSecondFactorStrategy;
+  emailAddressId?: string;
+  phoneNumberId?: string;
+  safeIdentifier?: string;
+};
+
+function secondFactorLabel(option: SignInSecondFactorOption) {
+  if (option.strategy === "email_code") return "Email verification code";
+  if (option.strategy === "totp") return "Authenticator app code";
+  if (option.strategy === "backup_code") return "Backup code";
+  return option.safeIdentifier ? `SMS code (${option.safeIdentifier})` : "SMS code";
+}
 
 const starterRoutes: StarterRoute[] = [
   { key: "os-process", domain: "Operating systems", title: "Trace process states and context switches", outcome: "Explain why a process moves between ready, running, and waiting." },
@@ -61,13 +76,35 @@ function readPendingGoal(): PendingGoal | null {
 }
 
 function inferredContract(goal: PendingGoal) {
-  const text = `${goal.title} ${goal.description}`.toLowerCase();
+  const category = (goal.category || "").toLowerCase();
+  const text = `${goal.title} ${goal.description} ${category}`.toLowerCase();
   const highStakes = /(medical|clinical|medicine|finance|stock|trading|invest)/.test(text);
   const engineering = /(operating system|dsp|signal|graphics|kernel|computer|engineering)/.test(text);
+  const categoryDomain: Record<string, string> = {
+    operating_systems: "Operating systems",
+    computer_graphics: "Computer graphics",
+    dsp: "Signal processing",
+    ai_ml: "Machine learning / AI",
+    medical: "Medical education",
+    history: "History",
+  };
+  const prerequisitesByDomain: Record<string, string[]> = {
+    "Operating systems": ["Name the relevant process or resource states", "Trace one bounded execution step", "Compare one measurable policy trade-off"],
+    "Computer graphics": ["Name the coordinate space and representation", "Apply one bounded transform or operation", "Predict the visible consequence before inspecting it"],
+    "Signal processing": ["Represent the signal or sequence clearly", "Relate the key variables with one equation", "Predict one bounded change before calculating"],
+    "Machine learning / AI": ["Identify the inputs, target, and evaluation signal", "Explain one model assumption", "Test one prediction on a concrete example"],
+    "Medical education": ["Separate academic mechanism from personal advice", "Identify the relevant structure or process", "Use a cited source to support the explanation"],
+    "History": ["Place the case on a bounded timeline", "Separate evidence from interpretation", "State one uncertainty or disagreement"],
+  };
+  const domain = categoryDomain[category] || (highStakes ? (/(finance|stock|trading|invest)/.test(text) ? "Finance education" : "Medical education") : engineering ? "Engineering" : "Adaptive study");
+  const focus = (goal.outcome || goal.description || goal.title).trim();
   return {
-    domain: highStakes ? (/(finance|stock|trading|invest)/.test(text) ? "Finance education" : "Medical education") : engineering ? "Engineering" : "Adaptive study",
+    domain,
     safety: highStakes ? "Academic + source-cited" : "Guided learning",
-    first: engineering ? "Predict the system behavior before inspecting the mechanism." : "Explain the first important idea in your own words before asking for an answer.",
+    prerequisites: prerequisitesByDomain[domain] || [`Define the core idea in ${goal.title.trim()}`, "Explain one concrete example", "Test the idea on a nearby case"],
+    first: engineering
+      ? `For ${goal.title.trim()}, predict the system behavior in one concrete case before inspecting the mechanism.`
+      : `For ${goal.title.trim()}, explain the mechanism in your own words, apply it to ${focus.toLowerCase()}, and name one uncertainty.`,
   };
 }
 
@@ -80,6 +117,7 @@ type ContractDraft = {
   safetyMode: string;
   verificationMode: string;
   firstTask: string;
+  brief: string;
 };
 
 function contractDraftFor(goal: PendingGoal): ContractDraft {
@@ -88,13 +126,39 @@ function contractDraftFor(goal: PendingGoal): ContractDraft {
   return {
     intendedCapability: goal.title,
     learnerStartingPoint: goal.currentLevel,
-    prerequisites: ["Name the core relationship", "Use one concrete example", "Transfer it to a nearby case"].join("\n"),
+    prerequisites: inferred.prerequisites.join("\n"),
     confidence: "provisional",
     sourceRequirements: academic ? "Source-backed evidence is required before a claim can be verified." : "Sources are optional until you want source-backed verification.",
     safetyMode: academic ? "academic_source_bound" : "guided",
     verificationMode: academic ? "source_backed" : "guided",
     firstTask: inferred.first,
+    brief: goal.description.trim() || goal.outcome.trim() || goal.title,
   };
+}
+
+function contractDraftFromModel(goal: PendingGoal, contract: LearningContract): ContractDraft {
+  const fallback = contractDraftFor(goal);
+  return {
+    intendedCapability: contract.intendedCapability?.trim() || fallback.intendedCapability,
+    learnerStartingPoint: (contract.learnerStartingPoint || fallback.learnerStartingPoint) as PendingGoal["currentLevel"],
+    prerequisites: (contract.prerequisites || []).filter(Boolean).join("\n") || fallback.prerequisites,
+    confidence: contract.confidence || fallback.confidence,
+    sourceRequirements: contract.sourceRequirements || fallback.sourceRequirements,
+    safetyMode: contract.safetyMode || fallback.safetyMode,
+    verificationMode: contract.verificationMode || fallback.verificationMode,
+    firstTask: contract.firstTask?.trim() || fallback.firstTask,
+    brief: contract.brief?.trim() || fallback.brief,
+  };
+}
+
+function displayModelName(model: string | undefined, provider: string) {
+  const normalized = model?.trim().replace(/^cx\//i, "");
+  return normalized || provider;
+}
+
+function parsePrerequisites(value: string) {
+  const lines = value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+  return lines.length > 1 ? lines : (lines[0] || "").split(",").map((item) => item.trim()).filter(Boolean);
 }
 
 export function UniversalGoalEntry() {
@@ -135,7 +199,11 @@ export function UniversalGoalEntry() {
     savePendingGoal(pending);
     try {
       await learningOsApi.me();
-      router.push(courseId ? `/goals/new?course=${encodeURIComponent(courseId)}` : "/goals/new");
+      // Change the URL when moving from intent entry to contract review so
+      // GoalSetupView re-reads the pending contract instead of remaining on
+      // the fallback intent form when the route was opened directly.
+      const reviewQuery = courseId ? `?course=${encodeURIComponent(courseId)}&review=1` : "?review=1";
+      router.push(`/goals/new${reviewQuery}`);
     } catch {
       const next = courseId ? `/goals/new?course=${encodeURIComponent(courseId)}` : "/goals/new";
       router.push(`/login?next=${encodeURIComponent(next)}` as never);
@@ -152,6 +220,14 @@ export function UniversalGoalEntry() {
     setHasSources(Boolean(route.sourceRequired));
   }
 
+  function changeCategory(nextCategory: string) {
+    setCategory(nextCategory);
+    // High-stakes adapters are source-bound by policy. Keep the intent form
+    // honest so the contract review cannot suggest that medical or finance
+    // learning is source-optional when the backend will require anchors.
+    if (nextCategory === "medical") setHasSources(true);
+  }
+
   return <main className="fos-entry-shell">
     <header className="fos-entry-top"><Link className="fos-brand" href={authState === true ? "/home" : "/"} aria-label="Feynman home"><span className="fos-brand-mark">f</span><span>feynman<span>.</span>ai</span></Link><nav aria-label="Landing page"><a href="#loop">The loop</a><a href="#boundary">Source boundary</a>{authState === true ? <><Link href="/goals">My goals</Link><Link href="/home" className="fos-entry-signin">Open workspace</Link></> : <><Link href={"/login" as never}>Sign in</Link><Link href={"/signup" as never} className="fos-entry-signin">Create a lab</Link></>}</nav></header>
     <section className="fos-entry-layout">
@@ -162,7 +238,7 @@ export function UniversalGoalEntry() {
         <label className="fos-field"><span>Your capability</span><textarea value={title} onChange={(event) => setTitle(event.target.value)} placeholder="For example: trace a process scheduler and explain its trade-offs." rows={3} maxLength={240} autoFocus /></label>
         <label className="fos-field"><span>Why does this matter to you? <em>optional</em></span><input value={outcome} onChange={(event) => setOutcome(event.target.value)} placeholder="Pass a viva, build a project, teach a peer…" maxLength={500} /></label>
         <label className="fos-field"><span>Starting point</span><select value={currentLevel} onChange={(event) => setCurrentLevel(event.target.value as PendingGoal["currentLevel"])}><option value="beginner">I am new to it</option><option value="intermediate">I know some pieces</option><option value="advanced">I need depth and transfer</option></select></label>
-        <label className="fos-field"><span>Learning category</span><select value={category} onChange={(event) => setCategory(event.target.value)}><option value="general">General learning</option><option value="operating_systems">Operating systems</option><option value="computer_graphics">Computer graphics</option><option value="dsp">Signal processing / DSP</option><option value="ai_ml">Machine learning / AI</option><option value="medical">Medical education</option><option value="history">History</option></select></label>
+        <label className="fos-field"><span>Learning category</span><select value={category} onChange={(event) => changeCategory(event.target.value)}><option value="general">General learning</option><option value="operating_systems">Operating systems</option><option value="computer_graphics">Computer graphics</option><option value="dsp">Signal processing / DSP</option><option value="ai_ml">Machine learning / AI</option><option value="medical">Medical education</option><option value="history">History</option></select></label>
         <label className="fos-source-toggle"><input type="checkbox" checked={hasSources} onChange={(event) => setHasSources(event.target.checked)} /><span><FeynmanIcon name="source" /><strong>Add a source when it should ground the route</strong><small>PDFs, images, documents, and webpages stay in a separate Source Desk.</small></span></label>
         {error ? <p className="fos-form-error" role="alert">{error}</p> : null}
         <button className="fos-goal-submit" type="submit">Build my learning route <FeynmanIcon name="arrow" /></button>
@@ -185,6 +261,10 @@ export function AuthView({ initialMode = "register" }: { initialMode?: "register
   const [password, setPassword] = useState("");
   const [needsVerification, setNeedsVerification] = useState(false);
   const [verificationCode, setVerificationCode] = useState("");
+  const [needsSecondFactor, setNeedsSecondFactor] = useState(false);
+  const [secondFactorOptions, setSecondFactorOptions] = useState<SignInSecondFactorOption[]>([]);
+  const [secondFactorStrategy, setSecondFactorStrategy] = useState<SignInSecondFactorStrategy | null>(null);
+  const [secondFactorCode, setSecondFactorCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [redirecting, setRedirecting] = useState(false);
@@ -232,7 +312,28 @@ export function AuthView({ initialMode = "register" }: { initialMode?: "register
         }
       } else if (mode === "login" && signInState.isLoaded) {
         const result = await signInState.signIn.create({ strategy: "password", identifier: email, password });
-        if (result.status !== "complete") throw new Error("This sign-in needs an additional verification step in Clerk.");
+        const status = String(result.status);
+        if (status === "needs_second_factor" || status === "needs_client_trust") {
+          const options: SignInSecondFactorOption[] = [];
+          const factors = (result.supportedSecondFactors ?? []) as unknown as Array<{ strategy: string; emailAddressId?: string; phoneNumberId?: string; safeIdentifier?: string }>;
+          for (const factor of factors) {
+            if (factor.strategy === "email_code") options.push({ strategy: "email_code", emailAddressId: factor.emailAddressId, safeIdentifier: factor.safeIdentifier });
+            if (factor.strategy === "phone_code") options.push({ strategy: "phone_code", phoneNumberId: factor.phoneNumberId, safeIdentifier: factor.safeIdentifier });
+            if (factor.strategy === "totp") options.push({ strategy: "totp" });
+            if (factor.strategy === "backup_code") options.push({ strategy: "backup_code" });
+          }
+          if (!options.length) throw new Error("Clerk requires additional verification, but no supported second-factor method is configured for this account.");
+          const preferred = options.find((option) => option.strategy === "email_code") ?? options.find((option) => option.strategy === "totp") ?? options.find((option) => option.strategy === "phone_code") ?? options[0];
+          if (preferred.strategy === "email_code") await result.prepareSecondFactor({ strategy: "email_code", emailAddressId: preferred.emailAddressId } as never);
+          if (preferred.strategy === "phone_code") await result.prepareSecondFactor({ strategy: "phone_code", phoneNumberId: preferred.phoneNumberId });
+          setSecondFactorOptions(options);
+          setSecondFactorStrategy(preferred.strategy);
+          setSecondFactorCode("");
+          setNeedsSecondFactor(true);
+          setError(preferred.strategy === "phone_code" ? "Clerk sent a verification code to your phone. Enter it below to finish signing in." : `Enter your ${secondFactorLabel(preferred).toLowerCase()} to finish signing in.`);
+          return;
+        }
+        if (status !== "complete") throw new Error(`Clerk could not complete this sign-in (${status}).`);
         await finishClerkSession(result.createdSessionId);
       } else {
         throw new Error("Authentication is still loading. Try again.");
@@ -255,15 +356,58 @@ export function AuthView({ initialMode = "register" }: { initialMode?: "register
     } finally { setBusy(false); }
   }
 
+  async function prepareSecondFactor(option: SignInSecondFactorOption) {
+    if (!signInState.isLoaded) return;
+    setBusy(true); setError("");
+    try {
+      if (option.strategy === "email_code") await signInState.signIn.prepareSecondFactor({ strategy: "email_code", emailAddressId: option.emailAddressId } as never);
+      if (option.strategy === "phone_code") await signInState.signIn.prepareSecondFactor({ strategy: "phone_code", phoneNumberId: option.phoneNumberId });
+      setSecondFactorStrategy(option.strategy);
+      setSecondFactorCode("");
+      setError(option.strategy === "phone_code" ? "Clerk sent a verification code to your phone. Enter it below." : `Enter your ${secondFactorLabel(option).toLowerCase()} below.`);
+    } catch (caught) {
+      setError(clerkErrorMessage(caught));
+    } finally { setBusy(false); }
+  }
+
+  async function verifySecondFactor(event: FormEvent) {
+    event.preventDefault();
+    if (!signInState.isLoaded || !secondFactorStrategy) return;
+    const code = secondFactorCode.trim();
+    if (!code) {
+      setError("Enter the verification code from your email before continuing.");
+      return;
+    }
+    setBusy(true); setError("");
+    try {
+      const result = secondFactorStrategy === "email_code"
+        ? await signInState.signIn.attemptSecondFactor({ strategy: "email_code", code } as never)
+        : secondFactorStrategy === "totp"
+        ? await signInState.signIn.attemptSecondFactor({ strategy: "totp", code })
+        : secondFactorStrategy === "backup_code"
+          ? await signInState.signIn.attemptSecondFactor({ strategy: "backup_code", code })
+          : await signInState.signIn.attemptSecondFactor({ strategy: "phone_code", code });
+      if (result.status !== "complete") throw new Error("That verification code did not complete the sign-in. Check it and try again.");
+      await finishClerkSession(result.createdSessionId);
+    } catch (caught) {
+      setError(clerkErrorMessage(caught));
+    } finally { setBusy(false); }
+  }
+
+  async function resendSecondFactor() {
+    const option = secondFactorOptions.find((candidate) => candidate.strategy === secondFactorStrategy);
+    if (option) await prepareSecondFactor(option);
+  }
+
   if (redirecting) return <main className="fos-entry-shell fos-route-state loading" role="status"><span className="fos-loading-orb" /><h2>Opening your workspace…</h2><p>Your active session is being restored.</p></main>;
   return <main className="fos-entry-shell fos-auth-shell">
     <header className="fos-entry-top"><Link className="fos-brand" href="/" aria-label="Feynman home"><span className="fos-brand-mark">f</span><span>feynman<span>.</span>ai</span></Link><nav aria-label="Authentication"><Link href={"/" as never}>Back to home</Link></nav></header>
     <section className="fos-onboarding-grid">
       <div className="fos-onboarding-copy"><span className="fos-eyebrow">LEARNER-OWNED BY DESIGN</span><h1>Your learning state is not a score.</h1><p>Feynman keeps source context in notebooks and learner evidence in your private workspace. You decide what a teacher or course can see.</p><div className="fos-trust-list"><div><FeynmanIcon name="source" /><span><strong>Notebook memory</strong><small>Extracted source text, citations, and outputs stay with that notebook.</small></span></div><div><FeynmanIcon name="proof" /><span><strong>Learner evidence</strong><small>Only visible attempts can change a capability state.</small></span></div><div><FeynmanIcon name="shield" /><span><strong>Revocable sharing</strong><small>Courses only receive the evidence you explicitly share.</small></span></div></div>
       </div>
-      <form className="fos-auth-card" onSubmit={(event) => void (needsVerification ? verifyEmail(event) : submit(event))}>
+      <form className="fos-auth-card" onSubmit={(event) => void (needsSecondFactor ? verifySecondFactor(event) : needsVerification ? verifyEmail(event) : submit(event))}>
         <div className="fos-auth-tabs"><span>{mode === "register" ? "CREATE YOUR LAB" : "WELCOME BACK"}</span><Link href={(mode === "register" ? "/login" : "/signup") as never}>{mode === "register" ? "Already have an account? Sign in" : "New here? Create a lab"}</Link></div>
-        {needsVerification ? <><span className="fos-eyebrow">VERIFY EMAIL</span><h2>One last step</h2><p>Enter the code Clerk sent to {email}.</p><label className="fos-field"><span>Verification code</span><input value={verificationCode} onChange={(event) => setVerificationCode(event.target.value)} inputMode="numeric" autoComplete="one-time-code" required /></label>{error ? <p className="fos-form-error" role="alert">{error}</p> : null}<button type="submit" className="fos-goal-submit" disabled={busy}>{busy ? "Verifying…" : "Verify and enter"}<FeynmanIcon name="arrow" /></button><button type="button" className="fos-quiet-action" onClick={() => { setNeedsVerification(false); setVerificationCode(""); setError(""); }}>Use a different email</button></> : <><h2>{mode === "register" ? "Make your personal lab" : "Welcome back"}</h2>{mode === "register" ? <label className="fos-field"><span>Name</span><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="How should Feynman address you?" maxLength={120} /></label> : null}<label className="fos-field"><span>Email</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" required /></label><label className="fos-field"><span>Password</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" minLength={8} required /></label>{mode === "register" ? <div id="clerk-captcha" aria-hidden="true" /> : null}{error ? <p className="fos-form-error" role="alert">{error}</p> : null}<button type="submit" className="fos-goal-submit" disabled={busy}>{busy ? "Opening…" : mode === "register" ? "Create my workspace" : "Sign in"}<FeynmanIcon name="arrow" /></button><p className="fos-auth-note">Authentication is handled by Clerk. Feynman receives only a verified session identity; provider API keys stay server-side.</p></>}
+        {needsSecondFactor ? <><span className="fos-eyebrow">VERIFY SIGN-IN</span><h2>One more step</h2><p>Clerk needs an additional verification before opening your workspace.</p>{secondFactorOptions.length > 1 ? <label className="fos-field"><span>Verification method</span><select value={secondFactorStrategy ?? ""} onChange={(event) => { const option = secondFactorOptions.find((candidate) => candidate.strategy === event.target.value); if (option) void prepareSecondFactor(option); }} disabled={busy}>{secondFactorOptions.map((option) => <option key={option.strategy} value={option.strategy}>{secondFactorLabel(option)}</option>)}</select></label> : null}<label className="fos-field"><span>{secondFactorStrategy ? secondFactorLabel({ strategy: secondFactorStrategy }) : "Verification code"}</span><input value={secondFactorCode} onChange={(event) => setSecondFactorCode(event.target.value)} inputMode="numeric" autoComplete="one-time-code" required /></label>{error ? <p className="fos-form-error" role="alert">{error}</p> : null}<button type="submit" className="fos-goal-submit" disabled={busy || !secondFactorStrategy}>{busy ? "Verifying…" : "Verify and enter"}<FeynmanIcon name="arrow" /></button>{secondFactorStrategy === "email_code" || secondFactorStrategy === "phone_code" ? <button type="button" className="fos-quiet-action" onClick={() => void resendSecondFactor()} disabled={busy}>Send a new code</button> : null}<button type="button" className="fos-quiet-action" onClick={() => { setNeedsSecondFactor(false); setSecondFactorOptions([]); setSecondFactorStrategy(null); setSecondFactorCode(""); setError(""); }}>Use a different account</button></> : needsVerification ? <><span className="fos-eyebrow">VERIFY EMAIL</span><h2>One last step</h2><p>Enter the code Clerk sent to {email}.</p><label className="fos-field"><span>Verification code</span><input value={verificationCode} onChange={(event) => setVerificationCode(event.target.value)} inputMode="numeric" autoComplete="one-time-code" required /></label>{error ? <p className="fos-form-error" role="alert">{error}</p> : null}<button type="submit" className="fos-goal-submit" disabled={busy}>{busy ? "Verifying…" : "Verify and enter"}<FeynmanIcon name="arrow" /></button><button type="button" className="fos-quiet-action" onClick={() => { setNeedsVerification(false); setVerificationCode(""); setError(""); }}>Use a different email</button></> : <><h2>{mode === "register" ? "Make your personal lab" : "Welcome back"}</h2>{mode === "register" ? <label className="fos-field"><span>Name</span><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="How should Feynman address you?" maxLength={120} /></label> : null}<label className="fos-field"><span>Email</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" required /></label><label className="fos-field"><span>Password</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="At least 8 characters" minLength={8} required /></label>{mode === "register" ? <div id="clerk-captcha" aria-hidden="true" /> : null}{error ? <p className="fos-form-error" role="alert">{error}</p> : null}<button type="submit" className="fos-goal-submit" disabled={busy}>{busy ? "Opening…" : mode === "register" ? "Create my workspace" : "Sign in"}<FeynmanIcon name="arrow" /></button><p className="fos-auth-note">Authentication is handled by Clerk. Feynman receives only a verified session identity; provider API keys stay server-side.</p></>}
       </form>
     </section>
   </main>;
@@ -276,23 +420,46 @@ export function OnboardingView() {
 
 export function GoalSetupView() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [pending, setPending] = useState<PendingGoal | null>(null);
   const [draft, setDraft] = useState<ContractDraft | null>(null);
   const [courseId, setCourseId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [contractNotice, setContractNotice] = useState("");
 
   useEffect(() => {
+    let live = true;
     const nextPending = readPendingGoal();
-    const requestedCourseId = new URLSearchParams(window.location.search).get("course") || "";
+    const requestedCourseId = searchParams.get("course") || "";
     if (!nextPending && requestedCourseId) {
       router.replace(`/?course=${encodeURIComponent(requestedCourseId)}`);
-      return;
+      return () => { live = false; };
     }
     setPending(nextPending);
-    setDraft(nextPending ? contractDraftFor(nextPending) : null);
+    setDraft(null);
+    setContractNotice("");
     setCourseId(nextPending?.courseId || requestedCourseId);
-  }, [router]);
+    if (nextPending) {
+      void learningOsApi.previewGoalContract({
+        title: nextPending.title,
+        description: nextPending.description,
+        outcome: nextPending.outcome,
+        currentLevel: nextPending.currentLevel,
+        timeBudget: nextPending.timeBudget,
+        category: nextPending.category,
+      }).then((result) => {
+        if (!live) return;
+        setDraft(contractDraftFromModel(nextPending, result.contract));
+        setContractNotice(result.generated ? `Drafted for this goal by ${displayModelName(result.model, result.provider)}. You can edit every field before starting.` : result.providerMessage || "Review this domain-specific starter contract before beginning.");
+      }).catch(() => {
+        if (!live) return;
+        setDraft(contractDraftFor(nextPending));
+        setContractNotice("The language model was unavailable, so this domain-specific starter contract is ready for you to edit.");
+      });
+    }
+    return () => { live = false; };
+  }, [router, searchParams]);
 
   async function createGoal() {
     if (!pending || !draft) { router.replace("/"); return; }
@@ -304,14 +471,14 @@ export function GoalSetupView() {
     }
     setBusy(true); setError("");
     try {
-      const brief = pending.description.trim() || pending.outcome.trim() || intendedCapability;
+      const brief = draft.brief.trim() || pending.description.trim() || pending.outcome.trim() || intendedCapability;
       const contract = {
         intendedCapability,
         learnerStartingPoint: draft.learnerStartingPoint,
         timeBudget: pending.timeBudget,
-        prerequisites: draft.prerequisites.split(/[,\n]/).map((item) => item.trim()).filter(Boolean),
+        prerequisites: parsePrerequisites(draft.prerequisites),
         confidence: "provisional",
-        sourceRequirements: inferredContract(pending).safety === "Academic + source-cited" ? "Source-backed evidence is required before a claim can be verified." : "Sources are optional until source-backed verification is needed.",
+        sourceRequirements: draft.safetyMode === "academic_source_bound" || draft.verificationMode === "source_backed" ? "Source-backed evidence is required before a claim can be verified." : "Sources are optional until source-backed verification is needed.",
         safetyMode: draft.safetyMode,
         verificationMode: draft.verificationMode,
         firstTask,
@@ -336,10 +503,13 @@ export function GoalSetupView() {
     } finally { setBusy(false); }
   }
 
-  if (!pending || !draft) return <UniversalGoalEntry />;
+  if (!pending) return <UniversalGoalEntry />;
+  if (!draft) return <LearningAppShell eyebrow="NEW GOAL" title="Preparing your learning contract" compact><section className="fos-route-state loading" role="status"><span className="fos-loading-orb" /><h2>Making this route specific to your goal…</h2><p>Feynman is drafting the prerequisites and first observable task from what you entered.</p></section></LearningAppShell>;
 
+  const inferred = inferredContract(pending);
+  const sourceBound = draft.safetyMode === "academic_source_bound" || draft.verificationMode === "source_backed";
   return <LearningAppShell eyebrow="NEW GOAL" title="Confirm your learning contract" actions={<Link href={courseId ? `/?course=${encodeURIComponent(courseId)}` : "/"} className="fos-quiet-action">Edit intent</Link>}>
-    <section className="fos-contract-layout"><div className="fos-contract-intro"><span className="fos-eyebrow">LEARNER-EDITABLE AGREEMENT</span><h1>Make the route accurate before it starts.</h1><p>Feynman proposes a starting contract, but you control the capability, boundary, and first proof. Nothing is confirmed until you do.</p><div className="fos-contract-goal"><span>WHY THIS MATTERS</span><strong>{pending.outcome || "A capability worth demonstrating"}</strong>{courseId ? <p>This goal will stay inside its selected course without exposing private notebook text.</p> : null}</div></div><form className="fos-contract-card fos-contract-form" onSubmit={(event) => { event.preventDefault(); void createGoal(); }}><div className="fos-contract-card-top"><StatusPill>{inferredContract(pending).domain}</StatusPill><StatusPill>{pending.hasSources ? "Source desk available" : "Sources optional"}</StatusPill></div><h2>Learning contract</h2><p className="fos-contract-lede">Four decisions are enough: what you will do, where you are starting, what must come first, and the first observable proof.</p><label className="fos-field"><span>Intended capability</span><textarea value={draft.intendedCapability} onChange={(event) => setDraft({ ...draft, intendedCapability: event.target.value })} rows={3} maxLength={240} required /></label><label className="fos-field"><span>Learner starting point</span><select value={draft.learnerStartingPoint} onChange={(event) => setDraft({ ...draft, learnerStartingPoint: event.target.value as PendingGoal["currentLevel"] })}><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select></label><label className="fos-field"><span>Prerequisites <em>one per line or comma-separated</em></span><textarea value={draft.prerequisites} onChange={(event) => setDraft({ ...draft, prerequisites: event.target.value })} rows={3} /></label><label className="fos-field"><span>First observable task</span><textarea value={draft.firstTask} onChange={(event) => setDraft({ ...draft, firstTask: event.target.value })} rows={3} maxLength={1000} required /></label><p className="fos-contract-boundary">Chat, reading, and generated answers do not confirm this contract. Your first learner state change requires an observable attempt.</p>{error ? <p className="fos-form-error" role="alert">{error}</p> : null}<button type="submit" className="fos-goal-submit" disabled={busy}>{busy ? "Saving contract…" : "Confirm and begin"}<FeynmanIcon name="arrow" /></button></form></section>
+    <section className="fos-contract-layout"><div className="fos-contract-intro"><span className="fos-eyebrow">LEARNER-EDITABLE AGREEMENT</span><h1>Make the route accurate before it starts.</h1><p>Feynman proposes a starting contract, but you control the capability, boundary, and first proof. Nothing is confirmed until you do.</p><div className="fos-contract-goal"><span>WHY THIS MATTERS</span><strong>{pending.outcome || "A capability worth demonstrating"}</strong>{courseId ? <p>This goal will stay inside its selected course without exposing private notebook text.</p> : null}</div></div><form className="fos-contract-card fos-contract-form" onSubmit={(event) => { event.preventDefault(); void createGoal(); }}><div className="fos-contract-card-top"><StatusPill>{inferred.domain}</StatusPill><StatusPill>{sourceBound ? "Source-backed required" : pending.hasSources ? "Source desk available" : "Sources optional"}</StatusPill></div><h2>Learning contract</h2><p className="fos-contract-lede">Four decisions are enough: what you will do, where you are starting, what must come first, and the first observable proof.</p>{contractNotice ? <p className="fos-contract-generated-note">{contractNotice}</p> : null}<label className="fos-field"><span>Intended capability</span><textarea value={draft.intendedCapability} onChange={(event) => setDraft({ ...draft, intendedCapability: event.target.value })} rows={3} maxLength={240} required /></label><label className="fos-field"><span>Learner starting point</span><select value={draft.learnerStartingPoint} onChange={(event) => setDraft({ ...draft, learnerStartingPoint: event.target.value as PendingGoal["currentLevel"] })}><option value="beginner">Beginner</option><option value="intermediate">Intermediate</option><option value="advanced">Advanced</option></select></label><label className="fos-field"><span>Prerequisites <em>one per line or comma-separated</em></span><textarea value={draft.prerequisites} onChange={(event) => setDraft({ ...draft, prerequisites: event.target.value })} rows={3} /></label><label className="fos-field"><span>First observable task</span><textarea value={draft.firstTask} onChange={(event) => setDraft({ ...draft, firstTask: event.target.value })} rows={3} maxLength={1000} required /></label><p className="fos-contract-boundary">{sourceBound ? "Medical and finance learning stay educational and require approved source anchors for verified evidence. Personal diagnosis, treatment, or trading advice is not provided." : "Chat, reading, and generated answers do not confirm this contract. Your first learner state change requires an observable attempt."}</p>{error ? <p className="fos-form-error" role="alert">{error}</p> : null}<button type="submit" className="fos-goal-submit" disabled={busy}>{busy ? "Saving contract…" : "Confirm and begin"}<FeynmanIcon name="arrow" /></button></form></section>
   </LearningAppShell>;
 }
 

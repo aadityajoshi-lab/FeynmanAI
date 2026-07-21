@@ -78,6 +78,21 @@ async function reviewableCourse(courseId: string) {
   return course;
 }
 
+async function loadWorkspaceGoal(goalId: string) {
+  try {
+    return await learningOsApi.goal(goalId);
+  } catch (caught) {
+    // A fresh tab can briefly resolve the legacy session before Clerk's
+    // signed-in profile is ready. Warm the owned-goal catalog once, then
+    // retry the exact goal instead of showing a misleading not-found state.
+    if (!(caught instanceof LearningOsApiError) || caught.status !== 404) throw caught;
+    const catalog = await learningOsApi.goals();
+    if (!catalog.goals.some((item) => item.goalId === goalId)) throw caught;
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    return await learningOsApi.goal(goalId);
+  }
+}
+
 export function HomeDashboard() {
   const [dataState, setData] = useState<{ goals: LearningGoal[]; evidence: EvidenceRecord[]; courses: Course[]; notebooks: NotebookListItem[] } | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -203,6 +218,7 @@ export function GoalOverviewView({ goalId }: { goalId: string }) {
   const [compiling, setCompiling] = useState(false);
   const [curriculumError, setCurriculumError] = useState<string | null>(null);
   const [shareMessage, setShareMessage] = useState("");
+  const [shareUrl, setShareUrl] = useState("");
   const load = useCallback(async () => {
     setError(null); setSourceError(null); setGoal(null); setSourceContexts([]);
     try {
@@ -234,8 +250,15 @@ export function GoalOverviewView({ goalId }: { goalId: string }) {
     try {
       const result = await learningOsApi.createGoalShare(goalState.goalId);
       const shareUrl = `${window.location.origin}/share/goals/${result.token}`;
-      await navigator.clipboard?.writeText(shareUrl);
-      setShareMessage("Template link copied. It includes the route and source metadata, never private evidence.");
+      setShareUrl(shareUrl);
+      let copied = false;
+      try {
+        if (navigator.clipboard) {
+          await navigator.clipboard.writeText(shareUrl);
+          copied = true;
+        }
+      } catch { /* The visible fallback below keeps sharing usable when clipboard access is denied. */ }
+      setShareMessage(copied ? "Template link copied. It includes the route and source metadata, never private evidence." : "Share link ready below. It includes the route and source metadata, never private evidence.");
     } catch (caught) { setShareMessage(message(caught, "The learning route could not be shared.")); }
   }
   if (!goalState) return <LearningAppShell eyebrow="LEARNING GOAL" title="Goal"><RouteState title="learning goal" state={error ? "error" : "loading"} error={error} onRetry={() => void load()} /></LearningAppShell>;
@@ -247,10 +270,13 @@ export function GoalOverviewView({ goalId }: { goalId: string }) {
   const failedSources = sources.filter((source) => source.status === "failed");
   const artifacts = sourceContexts.flatMap((context) => context.artifacts || []);
   const sourceDeskHref = `/sources?goal=${encodeURIComponent(goal.goalId)}` as never;
-  return <LearningAppShell eyebrow="LEARNING GOAL" title={goal.title} actions={<><Link href={sourceDeskHref} className="fos-quiet-action">Edit sources</Link><button type="button" className="fos-quiet-action" onClick={() => void shareGoal()}>Share route</button><Link href={`/goals/${goal.goalId}/learn`} className="fos-primary-action">Start guide <FeynmanIcon name="arrow" /></Link></>}>
+  const shareDesktopAction = <button type="button" className="fos-quiet-action" onClick={() => void shareGoal()}>Share route</button>;
+  const shareMobileAction = <button type="button" className="fos-mobile-more-link fos-mobile-action" onClick={() => void shareGoal()}>Share route</button>;
+  return <LearningAppShell eyebrow="LEARNING GOAL" title={goal.title} actions={<><Link href={sourceDeskHref} className="fos-quiet-action">Edit sources</Link>{shareDesktopAction}<Link href={`/goals/${goal.goalId}/learn`} className="fos-primary-action">Start guide <FeynmanIcon name="arrow" /></Link></>} mobileActions={shareMobileAction}>
     <section className="fos-goal-header"><div><span className="fos-eyebrow">{formatStatus(goal.domain)} · {goal.currentLevel}</span><h1>{goal.title}</h1><p>{goal.description || goal.outcome}</p><div className="fos-goal-status-row"><StatusPill>{formatStatus(goal.status)}</StatusPill><span>{goal.timeBudget || "Flexible schedule"}</span><span>{goal.sourceMode === "required" ? "Source-backed verification required" : "Sources optional until verification"}</span><span>Category: {formatStatus(goal.category || goal.domain)}</span></div></div><div className="fos-goal-header-score"><span>EVIDENCE</span><strong>{goal.evidenceCount}</strong><small>observable attempts</small></div></section>
     {error ? <p className="fos-form-error">{message(error, "The contract could not be updated.")}</p> : null}
     {shareMessage ? <p className="fos-share-message" role="status">{shareMessage}</p> : null}
+    {shareUrl ? <div className="fos-share-link-fallback"><label className="fos-field"><span>Share link</span><input aria-label="Share link URL" readOnly value={shareUrl} onFocus={(event) => event.currentTarget.select()} /></label><Link href={shareUrl as never} className="fos-quiet-action">Open shared route</Link></div> : null}
     {readySources.length ? <div className="fos-curriculum-action"><div><span className="fos-eyebrow">SOURCE-GROUNDED CURRICULUM</span><strong>{goal.curriculum?.status === "ready" ? `Curriculum v${goal.curriculum.version} · ${goal.curriculum.sourceAnchorIds.length} cited anchors` : "Compile a route from the selected ready sources."}</strong>{curriculumError ? <p className="fos-form-error">{curriculumError}</p> : null}</div><button type="button" className="fos-text-button" onClick={() => void compileCurriculum()} disabled={compiling}>{compiling ? "Compiling..." : goal.curriculum?.status === "ready" ? "Recompile" : "Compile curriculum"}</button></div> : null}
     {curriculumState?.status === "ready" ? <CurriculumPreview goal={goal} curriculum={curriculumState} onUpdated={(result) => { setCurriculum(result.curriculum); setGoal(result.goal); }} /> : null}
     <section className="fos-goal-overview-grid">
@@ -303,7 +329,20 @@ export function LearningWorkspaceView({ goalId }: { goalId: string }) {
   const routeActivityId = goalState?.route?.activeActivityId as string | undefined;
   const routeActivities = goalState?.activities;
   const activeActivityId = routeActivities?.[activeIndex]?.activityId;
-  const load = useCallback(async () => { setError(null); setGoal(null); try { setGoal(await learningOsApi.goal(goalId)); } catch (caught) { setError(caught); } }, [goalId]);
+  const load = useCallback(async () => {
+    setError(null);
+    setGoal(null);
+    try {
+      // Resolve the authenticated learner before loading a goal directly. On a
+      // hard refresh Clerk can finish hydration after the route mounts; the
+      // /me call lets the backend map that stable identity before a goal lookup
+      // instead of turning a transient anonymous lookup into a permanent 404.
+      await learningOsApi.me();
+      setGoal(await loadWorkspaceGoal(goalId));
+    } catch (caught) {
+      setError(caught);
+    }
+  }, [goalId]);
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
     if (!routeActivityId || !routeActivities) return;
@@ -588,7 +627,17 @@ export function CohortView({ courseId }: { courseId: string }) {
 export function InstitutionHomeView() {
   const [data, setData] = useState<{ workspace: LearningWorkspace; metrics: InstitutionMetrics } | null>(null);
   const [error, setError] = useState<unknown>(null);
-  const load = useCallback(async () => { setData(null); setError(null); try { const result = await learningOsApi.institutionDashboard(); setData({ workspace: result.workspace, metrics: result }); } catch (caught) { setError(caught); } }, []);
+  const load = useCallback(async () => {
+    setData(null);
+    setError(null);
+    try {
+      const workspaces = await learningOsApi.workspaces();
+      const workspace = workspaces.workspaces.find((item) => item.kind === "institution" && ["owner", "institution_admin"].includes(item.role || ""));
+      if (!workspace) throw new LearningOsApiError("Institution admin access is required.", 403, "role_required");
+      const result = await learningOsApi.institutionDashboard(workspace.workspaceId);
+      setData({ workspace: result.workspace, metrics: result });
+    } catch (caught) { setError(caught); }
+  }, []);
   useEffect(() => { void load(); }, [load]);
   if (!data && error instanceof LearningOsApiError && error.status === 404) return <LearningAppShell eyebrow="INSTITUTION" title="Institution"><RouteState title="institution workspace" state="empty" action={<Link href="/institution/courses" className="fos-primary-action">Create institution workspace</Link>} /></LearningAppShell>;
   if (!data) return <LearningAppShell eyebrow="INSTITUTION" title="Institution"><RouteState title="institution workspace" state={error ? "error" : "loading"} error={error} onRetry={() => void load()} /></LearningAppShell>;
@@ -682,7 +731,16 @@ export function InstitutionCoursesView() {
 export function InstitutionInsightsView() {
   const [metrics, setMetrics] = useState<InstitutionMetrics | null>(null);
   const [error, setError] = useState<unknown>(null);
-  const load = useCallback(async () => { setMetrics(null); setError(null); try { setMetrics(await learningOsApi.institutionDashboard()); } catch (caught) { setError(caught); } }, []);
+  const load = useCallback(async () => {
+    setMetrics(null);
+    setError(null);
+    try {
+      const workspaces = await learningOsApi.workspaces();
+      const workspace = workspaces.workspaces.find((item) => item.kind === "institution" && ["owner", "institution_admin"].includes(item.role || ""));
+      if (!workspace) throw new LearningOsApiError("Institution admin access is required.", 403, "role_required");
+      setMetrics(await learningOsApi.institutionDashboard(workspace.workspaceId));
+    } catch (caught) { setError(caught); }
+  }, []);
   useEffect(() => { void load(); }, [load]);
   if (!metrics) return <LearningAppShell eyebrow="INSTITUTION" title="Aggregate insights"><RouteState title="aggregate insights" state={error ? "error" : "loading"} error={error} onRetry={() => void load()} /></LearningAppShell>;
   return <LearningAppShell eyebrow="INSTITUTION" title="Aggregate insights"><SectionHeading eyebrow="USEFUL, NOT INTRUSIVE" title="Find learning friction without profiling people." copy="Indicators describe course conditions and shared evidence volume, not private learner activity." /><section className="fos-insight-grid"><article className="fos-panel fos-insight-feature"><span className="fos-eyebrow">SOURCE READINESS</span><h2>{metrics.sourceGovernance.approved} approved packs</h2><p>{metrics.sourceGovernance.needsReview} pack{metrics.sourceGovernance.needsReview === 1 ? "" : "s"} need review before they support verified learning claims.</p></article><article className="fos-panel"><span className="fos-eyebrow">ACTIVE LEARNING</span><strong className="fos-insight-number">{metrics.activeEnrollmentCount}</strong><p>active course enrollments</p></article><article className="fos-panel"><span className="fos-eyebrow">VERIFIED OUTPUT</span><strong className="fos-insight-number">{metrics.verifiedEvidenceCount}</strong><p>source-backed records across courses</p></article><article className="fos-panel fos-insight-callout"><FeynmanIcon name="shield" size={25} /><h2>What this view never shows</h2><p>Private chats, raw notebooks, unshared learner state, or learner ranking.</p></article></section></LearningAppShell>;

@@ -46,6 +46,7 @@ from .notebook_pipeline import (
     scoped_knowledge_pack,
 )
 from .providers import ProviderOutputError, ProviderUnavailable, record_provider_failure
+from .web_sources import WebSourceError, fetch_reference
 
 
 def _error(
@@ -514,10 +515,11 @@ class NotebookSourceRetryView(APIView):
 
 
 class NotebookTextSourceView(APIView):
-    """Add learner-provided text or a saved reference without fetching the web.
+    """Add text, webpages, or arXiv papers to notebook-scoped memory.
 
-    A URL is retained as learner-provided reference metadata only; the backend
-    never fetches arbitrary web pages into notebook memory by default.
+    A URL is fetched only for this explicit source-add action. HTML is reduced
+    to readable text and arXiv ``/abs`` links are resolved to their PDF. Raw
+    response bytes are held only for extraction and are never persisted.
     """
 
     parser_classes = [JSONParser]
@@ -538,6 +540,13 @@ class NotebookTextSourceView(APIView):
         title = _slug_title(str(body.get("title") or ""))
         content = str(body.get("text") or body.get("content") or "").strip()[:120000]
         reference_url = _text(body.get("url") or body.get("referenceUrl") or "", 2000)
+        raw_fetch_website = body.get("fetchWebsite")
+        if raw_fetch_website is not None and not isinstance(raw_fetch_website, bool):
+            return _error("fetchWebsite must be true or false.", "invalid_fetch_option")
+        # Older trusted clients sent a URL without this new field. Preserve the
+        # previous safe behavior for URL-only submissions while new clients make
+        # their extraction intent explicit.
+        fetch_website = bool(raw_fetch_website) if raw_fetch_website is not None else bool(reference_url and not content)
         if reference_url:
             parsed = urlparse(reference_url)
             if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -545,23 +554,64 @@ class NotebookTextSourceView(APIView):
         if not content and not reference_url:
             return _error("Paste source text or provide a reference URL.", "missing_source_content")
 
-        if reference_url and not content:
-            content = (
-                f"Reference: {title or urlparse(reference_url).netloc}\n"
-                f"URL: {reference_url}\n\n"
-                "This reference is saved without fetching the web. Add notes or an excerpt before relying on it for a grounded explanation."
-            )
-        elif reference_url:
+        fetched = None
+        if reference_url and fetch_website:
+            try:
+                fetched = fetch_reference(reference_url)
+            except WebSourceError as exc:
+                return _error(str(exc), "source_fetch_failed", status.HTTP_422_UNPROCESSABLE_ENTITY)
+            title = title or fetched.title
+            payload = fetched.payload
+            extraction_mime = fetched.extraction_mime
+            original_mime = fetched.original_mime
+            source_kind = fetched.source_kind
+        elif reference_url and content:
             content = f"{content}\n\nReference URL: {reference_url}"
+            payload = content.encode("utf-8")
+            extraction_mime = "text/markdown"
+            original_mime = "text/markdown"
+        elif content:
+            payload = content.encode("utf-8")
+            extraction_mime = "text/markdown"
+            original_mime = "text/markdown"
+        else:
+            return _error("Enable bounded webpage extraction or paste source text with this URL.", "source_fetch_required")
         if not title:
-            title = _slug_title(content.splitlines()[0] if content else urlparse(reference_url).netloc) or "Pasted source"
-
-        payload = content.encode("utf-8")
+            title = _slug_title(content.splitlines()[0] if content else urlparse(reference_url).netloc) or "Fetched source" if fetched else "Pasted source"
         digest = hashlib.sha256(payload).hexdigest()
         try:
-            blocks, assets, stats, method = extract_source(payload, "text/markdown", digest, provider="local")
+            provider = str(body.get("ocrProvider") or notebook.ocr_provider or "auto").strip().lower() if fetched and extraction_mime == "application/pdf" else "local"
+            blocks, assets, stats, method = extract_source(payload, extraction_mime, digest, provider=provider)
         except NotebookExtractionError as exc:
             return _error(str(exc), "extraction_failed")
+        # A fetched HTML page is normalized to Markdown before text extraction.
+        # Its bounded, public visuals are then attached as notebook assets with
+        # the same stable source anchors as uploaded PDF visuals.  We persist
+        # neither raw HTML nor a remote image URL, only approved image data.
+        if fetched and fetched.assets:
+            for index, web_asset in enumerate(fetched.assets, start=1):
+                data_url = str(web_asset.get("dataUrl") or "")
+                if not data_url.startswith("data:image/"):
+                    continue
+                asset_id = f"asset_{digest[:12]}_web_{index:02d}"
+                anchor = f"{digest[:12]}:web:img{index}"
+                assets.append({
+                    "assetId": asset_id,
+                    "type": "image",
+                    "mimeType": str(web_asset.get("mimeType") or "image/png"),
+                    "page": 1,
+                    "alt": str(web_asset.get("alt") or "Webpage visual"),
+                    "dataUrl": data_url,
+                })
+                blocks.append({
+                    "blockId": f"block_{digest[:10]}_web_image_{index:02d}",
+                    "type": "image",
+                    "markdown": f"[Source visual: {str(web_asset.get('alt') or 'Webpage visual')}]",
+                    "page": 1,
+                    "assetId": asset_id,
+                    "sourceAnchor": anchor,
+                })
+            stats = {**stats, "assetCount": len(assets), "webVisualCount": len(fetched.assets), "blockCount": len(blocks)}
 
         with transaction.atomic():
             notebook = Notebook.objects.select_for_update().get(pk=notebook.pk)
@@ -570,8 +620,8 @@ class NotebookTextSourceView(APIView):
                 source_id=f"nbsrc_{uuid.uuid4().hex}",
                 title=title,
                 source_kind=source_kind,
-                filename="",
-                mime_type="text/markdown",
+                filename=(urlparse(fetched.final_url).path.rsplit("/", 1)[-1] if fetched else ""),
+                mime_type=original_mime,
                 size_bytes=len(payload),
                 sha256=digest,
                 status="ready",
@@ -581,12 +631,17 @@ class NotebookTextSourceView(APIView):
                     "status": "complete",
                     **stats,
                     "referenceUrl": reference_url or None,
+                    "fetchedUrl": fetched.final_url if fetched else None,
+                    "fetchedContentType": fetched.original_mime if fetched else None,
+                    "fetchedBytes": fetched.fetched_bytes if fetched else None,
+                    "fetchWebsite": bool(fetched),
+                    "webMetadata": fetched.metadata if fetched else {},
                     "rawRetention": "discarded_after_extraction",
                 },
                 blocks=blocks,
                 assets=assets,
             )
-            notebook, _ = _refresh_notebook_memory(notebook, ocr_provider=f"typed_{method}")
+            notebook, _ = _refresh_notebook_memory(notebook, ocr_provider=f"fetched_{method}" if fetched else f"typed_{method}")
         del source
         return Response(notebook_payload(notebook), status=status.HTTP_201_CREATED)
 

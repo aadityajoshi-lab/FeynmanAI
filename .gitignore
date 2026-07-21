@@ -5,6 +5,7 @@ __pycache__/
 venv/
 backend/.env
 backend/db.sqlite3
+backend/db.sqlite3-*
 .pytest_cache/
 .ruff_cache/
 

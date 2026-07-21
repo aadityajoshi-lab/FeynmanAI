@@ -23,10 +23,23 @@ describe("LearningAppShell mobile navigation", () => {
     expect(styles).toContain("background: #ffffff;");
   });
 
+  it("supports route-specific actions inside the mobile More menu", () => {
+    expect(shell).toContain("mobileActions");
+    expect(shell).toContain("fos-mobile-action-slot");
+    expect(styles).toContain(".fos-mobile-action");
+  });
+
   it("exposes a real sign-out action for the authenticated workspace", () => {
     expect(shell).toContain('aria-label="Sign out"');
     expect(shell).toContain("signOutCurrentAuth");
     expect(shell).toContain('window.location.assign("/")');
     expect(styles).toContain(".fos-signout-action");
+  });
+
+  it("does not treat an unset Clerk marker as signed out during hydration", () => {
+    expect(shell).toContain("const marker = document.documentElement.dataset.feynmanAuth;");
+    expect(shell).toContain('if (marker === "signed-in") setIsSignedIn(true);');
+    expect(shell).toContain('if (marker === "signed-out") setIsSignedIn(false);');
+    expect(shell).not.toContain("document.documentElement.dataset.feynmanAuth === \"signed-in\";");
   });
 });

@@ -17,7 +17,7 @@ export type StudyPlanResponse = {
   studyPlanId?: string;
   sourceIds?: string[];
   chapterSelection?: "chapter_1" | "all";
-  providerMode: "codex_fixture" | "live_openai" | "live_fireworks" | "human_review";
+  providerMode: "codex_fixture" | "live_openai" | "live_qwen" | "live_fireworks" | "human_review";
   sourcePackVersion: string;
   recordVersion: number;
   outline?: Array<{ conceptId: string; title: string; objective: string; sourceAnchorIds: string[] }>;
@@ -30,7 +30,7 @@ export type StudyAction = { actionId: string; kind: string; label: string; paylo
 export type StudyCheckpoint = { kind: "predict" | "retrieval" | "teach_back" | "exam_bridge"; prompt: string; responseType: "single_choice" | "short_text" | "long_text"; options?: string[] | null; sourceAnchorIds: string[] };
 export type StudyStage = { stageId: string; kind: "definition" | "mcq" | "formula" | "diagram" | "numerical" | "teach_back"; title: string; prompt: string; responseType: "none" | "single_choice" | "short_text" | "long_text" | "file"; options?: string[] | null; sourceAnchorIds: string[] };
 export type StudyScene = { sceneId: string; conceptId: string; type: string; title: string; explanation?: string; keyPoints?: string[]; workedExample?: string | null; commonMistakes?: string[]; sourceAnchorIds: string[]; actions?: StudyAction[]; config?: Record<string, unknown>; checkpoint?: StudyCheckpoint | null; stages?: StudyStage[] };
-export type StudyInteractionResponse = { state?: string; prediction?: string; explanation?: string; prompt?: string; answer?: string; reasonCode?: string; correct?: boolean; understandingScore?: number; confidenceScore?: number; overconfidence?: boolean; feedback?: string; remediation?: string; mistake?: string; correctAnswer?: string; correction?: string; nextAction?: "advance" | "retry" | "review"; retryPrompt?: string | null; retryOptions?: string[] | null; retryResponseType?: StudyStage["responseType"] | null; retrySourceAnchorIds?: string[]; sourceAnchorIds: string[]; providerMode: "codex_fixture" | "live_openai" | "live_fireworks" | "human_review"; sourcePackVersion: string; recordVersion: number; reviewRequired?: boolean };
+export type StudyInteractionResponse = { state?: string; prediction?: string; explanation?: string; prompt?: string; answer?: string; reasonCode?: string; correct?: boolean; understandingScore?: number; confidenceScore?: number; overconfidence?: boolean; feedback?: string; remediation?: string; mistake?: string; correctAnswer?: string; correction?: string; nextAction?: "advance" | "retry" | "review"; retryPrompt?: string | null; retryOptions?: string[] | null; retryResponseType?: StudyStage["responseType"] | null; retrySourceAnchorIds?: string[]; sourceAnchorIds: string[]; providerMode: "codex_fixture" | "live_openai" | "live_qwen" | "live_fireworks" | "human_review"; sourcePackVersion: string; recordVersion: number; reviewRequired?: boolean };
 export type StudyRemediationVideoClip = { index: number; title: string; url: string; duration: number; width: number; height: number; poster?: string; narration?: { dataUrl: string; format: string; providerId: string; text: string } };
 export type StudyRemediationSlide = { index: number; title: string; body: string; bullets: string[]; narration: string; durationSeconds: number; sourceAnchorIds: string[]; diagram?: { nodes: Array<{ id: string; label: string }>; edges: Array<{ from: string; to: string }> }; audio?: { dataUrl: string; format: string; providerId: string; text: string } };
 export type StudyRemediationVideo = { mode: "fireworks_slides"; title: string; requestedDurationSeconds: number; actualDurationSeconds: number; providerId: string; voiceProviderId?: string | null; slides: StudyRemediationSlide[] } | { mode: "sequenced_clips"; title: string; requestedDurationSeconds: number; actualDurationSeconds: number; providerId: string; clips: StudyRemediationVideoClip[] };
@@ -38,9 +38,9 @@ export type StudyRemediationVideoResponse = { success?: boolean; remediationVide
 export type StudyRemediationVideoConfig = { mode: "fireworks_slides" | "sequenced_clips"; provider: string; label: string; configured: boolean; voiceConfigured: boolean; minDurationSeconds: number; maxDurationSeconds: number };
 export type StudyChatAction = { kind: "none" | "next_scene" | "previous_scene" | "open_scene" | "focus_checkpoint" | "show_visualization" | "repeat_explanation" | "set_learning_mode"; sceneId?: string | null; modeId?: string | null; reason?: string };
 export type StudyChatMessage = { role: "user" | "assistant"; content: string };
-export type StudyChatResponse = { state: "answered" | "abstained" | "needs_human_review" | "action_only"; reply: string; reasonCode?: string | null; sourceAnchorIds: string[]; action: StudyChatAction; providerMode: "codex_fixture" | "live_openai" | "live_fireworks" | "human_review"; sourcePackVersion: string; recordVersion: number; reviewRequired?: boolean };
+export type StudyChatResponse = { state: "answered" | "abstained" | "needs_human_review" | "action_only"; reply: string; reasonCode?: string | null; sourceAnchorIds: string[]; action: StudyChatAction; providerMode: "codex_fixture" | "live_openai" | "live_qwen" | "live_fireworks" | "human_review"; sourcePackVersion: string; recordVersion: number; reviewRequired?: boolean };
 
-export type ProviderStatus = { id: "fireworks" | "openai" | "fixture"; label: string; available: boolean; model: string };
+export type ProviderStatus = { id: "qwen" | "fireworks" | "openai" | "fixture"; label: string; available: boolean; model: string };
 
 const API_BASE = (process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000/api/v1").replace(/\/$/, "");
 
@@ -74,7 +74,7 @@ export async function ingestStudyUrl(url: string, metadata?: { subjectId?: strin
   return response.json() as Promise<StudySourceIngestResponse>;
 }
 
-export async function generateStudyPlan(input: { subjectId: string; subjectTitle?: string; moduleId?: string; sourceIds: string[]; pastQuestionSourceIds?: string[]; chapterSelection: "chapter_1" | "all"; provider?: "fireworks" | "openai" | "fixture"; learningGoal?: "course" | "skill" | "interview" | "viva"; assessmentFocus?: "mastery" | "mock_test" | "conversation" | "viva"; skillLevel?: "beginner" | "intermediate" | "advanced"; goalBrief?: string }): Promise<StudyPlanResponse> {
+export async function generateStudyPlan(input: { subjectId: string; subjectTitle?: string; moduleId?: string; sourceIds: string[]; pastQuestionSourceIds?: string[]; chapterSelection: "chapter_1" | "all"; provider?: "qwen" | "fireworks" | "openai" | "fixture"; learningGoal?: "course" | "skill" | "interview" | "viva"; assessmentFocus?: "mastery" | "mock_test" | "conversation" | "viva"; skillLevel?: "beginner" | "intermediate" | "advanced"; goalBrief?: string }): Promise<StudyPlanResponse> {
   const response = await fetch(`${API_BASE}/study-plans`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -90,7 +90,7 @@ export async function getProviderStatus(): Promise<{ providers: ProviderStatus[]
   return response.json() as Promise<{ providers: ProviderStatus[]; defaultProvider: string }>;
 }
 
-export async function interactWithStudyPlan(input: { sourceIds: string[]; provider: "fireworks" | "openai" | "fixture"; kind: "mcq" | "predict" | "retrieval" | "formula" | "diagram" | "numerical" | "teach_back" | "exam_bridge"; response: string; confidence: number; attachment?: { name: string; mimeType: string; dataUrl: string } | null; scene: { sceneId: string; prompt?: string; explanation?: string; responseType?: string; sourceAnchorIds: string[]; stage?: { stageId: string; kind: string; title: string; prompt: string; responseType: string; options?: string[] | null; sourceAnchorIds: string[] } } }): Promise<StudyInteractionResponse> {
+export async function interactWithStudyPlan(input: { sourceIds: string[]; provider: "qwen" | "fireworks" | "openai" | "fixture"; kind: "mcq" | "predict" | "retrieval" | "formula" | "diagram" | "numerical" | "teach_back" | "exam_bridge"; response: string; confidence: number; attachment?: { name: string; mimeType: string; dataUrl: string } | null; scene: { sceneId: string; prompt?: string; explanation?: string; responseType?: string; sourceAnchorIds: string[]; stage?: { stageId: string; kind: string; title: string; prompt: string; responseType: string; options?: string[] | null; sourceAnchorIds: string[] } } }): Promise<StudyInteractionResponse> {
   const response = await fetch(`${API_BASE}/study-plans/interactions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -129,7 +129,7 @@ export async function chatWithStudyPlan(input: {
   subjectTitle?: string;
   moduleId?: string;
   sourceIds: string[];
-  provider: "fireworks" | "openai" | "fixture";
+  provider: "qwen" | "fireworks" | "openai" | "fixture";
   message: string;
   history: StudyChatMessage[];
   activeSceneId?: string | null;

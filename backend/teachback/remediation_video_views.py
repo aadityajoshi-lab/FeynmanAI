@@ -14,7 +14,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .providers import ProviderOutputError, ProviderUnavailable, provider_for
+from .providers import ProviderOutputError, ProviderUnavailable, active_generation_configured, provider_for
 from .study_plan_views import _error, _source_context
 
 
@@ -193,7 +193,7 @@ def _generate_voice(text: str) -> dict | None:
 
 
 def _fireworks_slide_lesson(*, topic_title: str, stage_kind: str, mistake: str, correct_answer: str, correction: str, remediation: str, source_context: str, allowed_anchors: set[str], scene_anchors: list[str], requested_duration: int) -> dict:
-    provider = provider_for("fireworks")
+    provider = provider_for()
     manifest = provider.generate_remediation_slides({
         "topicTitle": topic_title,
         "stageKind": stage_kind,
@@ -225,11 +225,11 @@ def _fireworks_slide_lesson(*, topic_title: str, stage_kind: str, mistake: str, 
         if voice:
             slide["audio"] = {**voice, "text": slide["narration"]}
     return {
-        "mode": "fireworks_slides",
+        "mode": f"{getattr(provider, 'provider_id', 'live')}_slides",
         "title": str(manifest.get("title") or f"{topic_title} — guided correction")[:240],
         "requestedDurationSeconds": requested_duration,
         "actualDurationSeconds": per_slide * len(slides),
-        "providerId": "fireworks-qwen3p7-plus",
+        "providerId": f"{getattr(provider, 'provider_id', 'live')}-{getattr(provider, 'model', 'configured-model')}",
         "voiceProviderId": "voxcpm-python" if any("audio" in slide for slide in slides) else None,
         "slides": slides,
     }
@@ -246,7 +246,7 @@ class StudyRemediationVideoConfigView(APIView):
             "mode": "sequenced_clips" if rendered else "fireworks_slides",
             "provider": "configured video provider" if rendered else "fireworks-qwen3p7-plus",
             "label": "Rendered video clips" if rendered else "Fireworks narrated slides",
-            "configured": bool(settings.FIREWORKS_API_KEY) if not rendered else bool(settings.VIDEO_SERVICE_BASE_URL and settings.VIDEO_SERVICE_KEY),
+            "configured": active_generation_configured() if not rendered else bool(settings.VIDEO_SERVICE_BASE_URL and settings.VIDEO_SERVICE_KEY),
             "voiceConfigured": bool(settings.TTS_VOXCPM_BASE_URL),
             "minDurationSeconds": 60,
             "maxDurationSeconds": 300,

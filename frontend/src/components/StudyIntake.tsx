@@ -8,7 +8,7 @@ import type { AssessmentFocus, LearningGoal, SkillLevel, StudyAsset } from "@/li
 import { generateStudyPlan, getProviderStatus, getRemediationVideoConfig, ingestStudySource, ingestStudyUrl, ProviderStatus, StudySourceIngestResponse, StudyRemediationVideoConfig } from "@/lib/studyApi";
 
 const acceptedTypes = new Set(["application/pdf", "image/png", "image/jpeg", "image/webp", "video/mp4", "video/webm", "video/quicktime", "audio/mpeg", "audio/wav", "audio/x-wav", "audio/ogg", "audio/webm"]);
-type LiveProvider = "fireworks" | "openai";
+type LiveProvider = "qwen" | "fireworks" | "openai";
 type SetupStep = 1 | 2 | 3;
 
 const goals: Array<{ id: LearningGoal; eyebrow: string; label: string; description: string; examples: string; focus: AssessmentFocus; icon: string }> = [
@@ -47,7 +47,7 @@ export default function StudyIntake() {
   const [assessmentFocus, setAssessmentFocus] = useState<AssessmentFocus>("mastery");
   const [chapterSelection, setChapterSelection] = useState<"chapter_1" | "all">("chapter_1");
   const [learningMode, setLearningMode] = useState<string>(studyModes[0].id);
-  const [provider, setProvider] = useState<LiveProvider>("fireworks");
+  const [provider, setProvider] = useState<LiveProvider>("qwen");
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [videoConfig, setVideoConfig] = useState<StudyRemediationVideoConfig | null>(null);
   const [videoDurationSeconds, setVideoDurationSeconds] = useState(120);
@@ -65,7 +65,7 @@ export default function StudyIntake() {
 
   const goal = useMemo(() => goals.find((item) => item.id === learningGoal) ?? goals[0], [learningGoal]);
   const mode = useMemo(() => studyModes.find((item) => item.id === learningMode) ?? studyModes[0], [learningMode]);
-  const liveProviders = providers.filter((item): item is ProviderStatus & { id: LiveProvider } => item.id === "fireworks" || item.id === "openai");
+  const liveProviders = providers.filter((item): item is ProviderStatus & { id: LiveProvider } => item.id === "qwen" || item.id === "fireworks" || item.id === "openai");
   const selectedProvider = liveProviders.find((item) => item.id === provider);
   const totalResources = assets.length + pastQuestionAssets.length + (sourceUrl.trim() ? 1 : 0);
   const canBuild = Boolean(subjectTitle.trim() && selectedProvider?.available && !starting);
@@ -73,8 +73,8 @@ export default function StudyIntake() {
   useEffect(() => {
     getProviderStatus().then((status) => {
       setProviders(status.providers);
-      const preferred = status.providers.find((item) => item.id === "fireworks" && item.available) ?? status.providers.find((item) => item.id === "openai" && item.available);
-      if (preferred && (preferred.id === "fireworks" || preferred.id === "openai")) setProvider(preferred.id);
+      const preferred = status.providers.find((item) => item.id === "qwen" && item.available) ?? status.providers.find((item) => item.id === "fireworks" && item.available) ?? status.providers.find((item) => item.id === "openai" && item.available);
+      if (preferred && (preferred.id === "qwen" || preferred.id === "fireworks" || preferred.id === "openai")) setProvider(preferred.id);
     }).catch(() => setError("The live builder could not be reached. Check that Django is running."));
     getRemediationVideoConfig().then(setVideoConfig).catch(() => setVideoConfig(null));
   }, []);

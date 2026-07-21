@@ -34,7 +34,7 @@ from django.conf import settings
 
 from .ingestion import IngestionError, extract_pdf_candidates_from_bytes, normalize_extracted_text
 from .models import Notebook, NotebookArtifact, NotebookChatMessage, NotebookNote, NotebookSource
-from .providers import record_provider_failure, record_provider_success
+from .providers import ProviderOutputError, ProviderUnavailable, active_generation_configured, provider_for, record_provider_failure, record_provider_success
 
 
 class NotebookExtractionError(ValueError):
@@ -195,9 +195,57 @@ def _render_pdf_visual_assets(payload: bytes, sha256: str, pages: dict[int, str]
     return assets
 
 
+def _enrich_visual_assets_with_diagrams(assets: list[dict], blocks: list[dict]) -> dict:
+    """Optionally interpret extracted visuals with the active vision-capable provider.
+
+    Extraction never fails because a vision request is unavailable. The image
+    and its page anchor remain durable, while the semantic graph is marked
+    unavailable so the UI can show the real limitation instead of a fake
+    diagram.
+    """
+    configured = str(getattr(settings, "LLM_PROVIDER", "") or "").casefold() in {"openai", "live_openai", "qwen", "live_qwen", "fireworks", "live_fireworks"}
+    if not configured or not active_generation_configured():
+        return {"diagramExtraction": "not_configured", "diagramCount": 0}
+    candidates = [asset for asset in assets if isinstance(asset, dict) and isinstance(asset.get("dataUrl"), str) and asset.get("dataUrl", "").startswith("data:image/")]
+    if not candidates:
+        return {"diagramExtraction": "no_visual_assets", "diagramCount": 0}
+    diagram_count = 0
+    failed = 0
+    try:
+        provider = provider_for()
+    except (ProviderUnavailable, ProviderOutputError):
+        return {"diagramExtraction": "provider_unavailable", "diagramCount": 0}
+    for asset in candidates[:8]:
+        try:
+            result = provider.extract_diagram(image_data_url=str(asset["dataUrl"]), page=asset.get("page"))
+        except (ProviderUnavailable, ProviderOutputError, AttributeError):
+            failed += 1
+            continue
+        if not isinstance(result, dict) or not result.get("isDiagram") or not result.get("nodes"):
+            continue
+        diagram = {
+            "caption": str(result.get("caption") or "Source diagram")[:400],
+            "nodes": result.get("nodes") or [],
+            "edges": result.get("edges") or [],
+            "provider": str(getattr(provider, "provider_id", "local")),
+            "model": str(getattr(provider, "model", "")),
+        }
+        asset["diagram"] = diagram
+        asset["visualKind"] = "source-diagram"
+        diagram_count += 1
+        for block in blocks:
+            if block.get("assetId") == asset.get("assetId"):
+                block["diagram"] = diagram
+                block["visualKind"] = "source-diagram"
+    if diagram_count:
+        return {"diagramExtraction": "complete", "diagramCount": diagram_count, "diagramFailures": failed}
+    return {"diagramExtraction": "no_diagrams_detected" if not failed else "partial_provider_failure", "diagramCount": 0, "diagramFailures": failed}
+
+
 def _local_extract(payload: bytes, mime_type: str, sha256: str) -> tuple[list[dict], list[dict], dict]:
     blocks: list[dict] = []
     assets: list[dict] = []
+    diagram_stats: dict = {}
     if mime_type == "application/pdf":
         try:
             candidates = extract_pdf_candidates_from_bytes(payload, sha256=sha256)
@@ -249,6 +297,7 @@ def _local_extract(payload: bytes, mime_type: str, sha256: str) -> tuple[list[di
                 "assetId": asset["assetId"],
                 "sourceAnchor": f"{sha256[:12]}:p{asset['page']}:rendered-diagram",
             })
+        diagram_stats = _enrich_visual_assets_with_diagrams(assets, blocks)
     elif mime_type in {"text/plain", "text/markdown", "text/csv"}:
         text = normalize_extracted_text(payload.decode("utf-8", errors="replace"))
         blocks.append({"blockId": f"block_{sha256[:10]}_0001", "type": "text", "markdown": text, "page": 1, "sourceAnchor": f"{sha256[:12]}:p1"})
@@ -280,7 +329,7 @@ def _local_extract(payload: bytes, mime_type: str, sha256: str) -> tuple[list[di
         blocks.append({"blockId": f"block_{sha256[:10]}_0001", "type": "image", "markdown": "[Source image]", "page": 1, "assetId": assets[0]["assetId"], "sourceAnchor": f"{sha256[:12]}:p1"})
     else:
         blocks.append({"blockId": f"block_{sha256[:10]}_0001", "type": "text", "markdown": f"{mime_type} source uploaded. Connect Mistral OCR for structured extraction.", "page": 1, "sourceAnchor": f"{sha256[:12]}:p1"})
-    return blocks, assets, {"pageCount": max([int(block.get("page") or 1) for block in blocks] or [0]), "blockCount": len(blocks), "assetCount": len(assets)}
+    return blocks, assets, {"pageCount": max([int(block.get("page") or 1) for block in blocks] or [0]), "blockCount": len(blocks), "assetCount": len(assets), **diagram_stats}
 
 
 def _mistral_blocks(result: dict, sha256: str) -> tuple[list[dict], list[dict], dict]:
@@ -330,6 +379,7 @@ def _mistral_blocks(result: dict, sha256: str) -> tuple[list[dict], list[dict], 
             if markdown:
                 blocks.append({"blockId": f"block_{sha256[:10]}_p{page_number}_001", "type": "text", "markdown": markdown, "page": page_number, "sourceAnchor": f"{sha256[:12]}:p{page_number}"})
     stats = {"pageCount": len(result.get("pages") or []), "blockCount": len(blocks), "assetCount": len(assets), "usage": result.get("usage_info") or {}}
+    stats.update(_enrich_visual_assets_with_diagrams(assets, blocks))
     return blocks, assets, stats
 
 
@@ -341,6 +391,7 @@ def extract_source(payload: bytes, mime_type: str, sha256: str, *, provider: str
             raise NotebookExtractionError("Mistral OCR is selected but MISTRAL_API_KEY is not configured.")
         try:
             blocks, assets, stats = _mistral_blocks(_mistral_ocr(payload, mime_type), sha256)
+            stats.update(_enrich_visual_assets_with_diagrams(assets, blocks))
         except NotebookExtractionError as exc:
             # A configured key must not make the entire notebook unusable when
             # Windows Defender, a proxy, or a restricted network blocks the

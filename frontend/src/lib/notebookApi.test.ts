@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { addNotebookTextSource, askNotebook, createNotebookArtifact, createNotebook, deleteNotebookSource, listNotebooks, retryNotebookSource } from "./notebookApi";
-import { setAuthTokenGetter } from "./learningOsApi";
+import { LearningOsApiError, setAuthTokenGetter } from "./learningOsApi";
 
 const fetchMock = vi.fn();
 
@@ -32,6 +32,15 @@ describe("notebook API source scope", () => {
 
     expect(notebooks).toEqual([expect.objectContaining({ notebookId: "notebook-1", sourceCount: 2 })]);
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/notebooks"), expect.objectContaining({ cache: "no-store", credentials: "include" }));
+  });
+
+  it("preserves an unauthorized status for the shared protected-route boundary", async () => {
+    vi.stubGlobal("fetch", fetchMock.mockResolvedValue(jsonResponse({ error: { code: "authentication_required", message: "Sign in to browse your source contexts." } }, 401)));
+
+    await expect(listNotebooks()).rejects.toMatchObject({
+      name: "LearningOsApiError",
+      status: 401,
+    } satisfies Partial<LearningOsApiError>);
   });
 
   it("keeps course scope explicit when a new source desk is created", async () => {
@@ -96,5 +105,18 @@ describe("notebook API source scope", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toContain("/notebooks/notebook-1/sources/text");
     expect(JSON.parse(init.body)).toMatchObject({ sourceKind: "pasted_notes", useForGrounding: false });
+  });
+
+  it("requests bounded webpage extraction for a URL source", async () => {
+    vi.stubGlobal("fetch", fetchMock.mockResolvedValue(jsonResponse({ notebookId: "notebook-1" })));
+
+    await addNotebookTextSource("notebook-1", { url: "https://example.com/article", sourceKind: "url_reference", fetchWebsite: true, ocrProvider: "auto" });
+
+    const [, init] = fetchMock.mock.calls[0];
+    expect(JSON.parse(init.body)).toMatchObject({
+      url: "https://example.com/article",
+      fetchWebsite: true,
+      ocrProvider: "auto",
+    });
   });
 });

@@ -55,6 +55,70 @@ def test_goal_without_optional_description_keeps_contract_brief_non_empty() -> N
 
 
 @pytest.mark.django_db
+def test_goal_contract_preview_uses_goal_specific_provider_draft() -> None:
+    client = APIClient()
+    _register(client, "contract-preview@example.com")
+
+    class FakeProvider:
+        def generate_learning_contract(self, request):
+            assert request["title"] == "Understand transformer attention from scratch"
+            return {
+                "intendedCapability": request["title"],
+                "prerequisites": [
+                    "Represent query, key, and value vectors",
+                    "Compute a scaled dot product",
+                    "Apply softmax to attention scores",
+                    "Explain positional information",
+                    "Compare one encoder and decoder behavior",
+                    "Trace one value-vector combination",
+                    "Name one causal masking rule",
+                    "Relate attention weights to context",
+                    "Describe one training objective",
+                    "Identify one architecture trade-off",
+                    "State one uncertainty",
+                    "Connect the sequence to one application",
+                    "This thirteenth item should be trimmed by the contract boundary",
+                ],
+                "firstTask": "For one three-token sequence, predict which token receives the strongest attention and explain why.",
+                "brief": "Build an intuition for transformer attention.",
+                "confidence": "provisional",
+            }
+
+    with patch("teachback.learning_os_views.provider_for", return_value=FakeProvider()):
+        response = client.post(
+            "/api/v1/goals/contract-preview",
+            {
+                "title": "Understand transformer attention from scratch",
+                "description": "I want to understand the mechanism, not memorize the name.",
+                "outcome": "Explain one attention calculation",
+                "currentLevel": "beginner",
+                "timeBudget": "Three focused sessions",
+                "category": "ai_ml",
+            },
+            format="json",
+        )
+
+    assert response.status_code == 200, response.content
+    body = response.json()
+    assert body["generated"] is True
+    assert body["contract"]["prerequisites"] == [
+        "Represent query, key, and value vectors",
+        "Compute a scaled dot product",
+        "Apply softmax to attention scores",
+        "Explain positional information",
+        "Compare one encoder and decoder behavior",
+        "Trace one value-vector combination",
+        "Name one causal masking rule",
+        "Relate attention weights to context",
+        "Describe one training objective",
+        "Identify one architecture trade-off",
+        "State one uncertainty",
+        "Connect the sequence to one application",
+    ]
+    assert "three-token" in body["contract"]["firstTask"]
+
+
+@pytest.mark.django_db
 def test_goal_contract_records_observed_and_source_backed_verified_evidence() -> None:
     client = APIClient()
     _register(client, "learner@example.com")
@@ -402,6 +466,17 @@ def test_course_sharing_is_explicit_and_revoke_removes_instructor_access() -> No
     assert revoked.status_code == 200
     after_revoke = instructor.get(f"/api/v1/courses/{course_payload['courseId']}/cohort")
     assert after_revoke.json()["learners"][0]["sharedEvidence"] == []
+
+
+@pytest.mark.django_db
+def test_personal_workspace_cannot_be_used_for_institution_dashboard() -> None:
+    learner = APIClient()
+    _register(learner, "personal-dashboard@example.com", "Personal learner")
+
+    response = learner.get("/api/v1/institution/dashboard")
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "forbidden"
 
 
 @pytest.mark.django_db

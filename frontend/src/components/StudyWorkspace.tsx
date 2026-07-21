@@ -232,11 +232,12 @@ export default function StudyWorkspace() {
   const activeOutline = draft?.plan?.outline?.find((item) => item.conceptId === activeScene?.conceptId);
   const learningMode = draft?.learningMode ?? studyModes[0].id;
   const mode = useMemo(() => studyModes.find((item) => item.id === learningMode) ?? studyModes[0], [learningMode]);
+  const visibleActionCount = activeScene ? visibleActions[activeScene.sceneId] : undefined;
 
   useEffect(() => {
-    if (!activeScene?.sceneId || visibleActions[activeScene.sceneId] !== undefined) return;
+    if (!activeScene?.sceneId || visibleActionCount !== undefined) return;
     setVisibleActions((current) => ({ ...current, [activeScene.sceneId]: Math.min(1, activeScene.actions?.length ?? 0) }));
-  }, [activeScene?.sceneId]);
+  }, [activeScene?.actions?.length, activeScene?.sceneId, visibleActionCount]);
 
   function topicUnlocked(index: number) {
     if (index === 0) return true;
@@ -557,7 +558,7 @@ function RemediationClipPlayer({ video }: { video: Extract<StudyRemediationVideo
   useEffect(() => {
     if (!playing || !clip || !videoRef.current) return;
     void videoRef.current.play().catch(() => setPlaying(false));
-  }, [clip?.url, playing]);
+  }, [clip, playing]);
   if (!clip) return null;
   function playNarration() {
     setPlaying(true);
@@ -601,6 +602,7 @@ function FireworksSlidePlayer({ video }: { video: Extract<StudyRemediationVideo,
   useEffect(() => {
     if (!playing || !slide) return;
     let cancelled = false;
+    const audioElement = audioRef.current;
     const timer = window.setTimeout(() => {
       if (cancelled) return;
       if (slideIndex >= video.slides.length - 1) setPlaying(false);
@@ -633,7 +635,7 @@ function FireworksSlidePlayer({ video }: { video: Extract<StudyRemediationVideo,
       cancelled = true;
       window.clearTimeout(timer);
       window.speechSynthesis?.cancel();
-      audioRef.current?.pause();
+      audioElement?.pause();
     };
   }, [playing, slide, slideIndex, video.slides.length]);
   if (!slide) return null;

@@ -106,15 +106,17 @@ INTERACTION_CONTRACTS: dict[str, dict[str, Any]] = {
 }
 
 
-def _domain_contract(domain: str) -> dict[str, Any]:
+def _domain_contract(domain: str, concept: str) -> dict[str, Any]:
     adapter = get_domain_adapter(domain=domain)
     return {
         "kind": adapter.interaction_kind,
         "controls": [dict(control) for control in adapter.controls],
         "expected": list(adapter.expected_observations),
         "rubric": list(adapter.rubric),
-        "remediation": adapter.remediation_target,
-        "transfer": adapter.transfer_target,
+        # Adapter templates are authored once and must be resolved before they
+        # reach a persisted activity or learner-facing route response.
+        "remediation": adapter.remediation(concept),
+        "transfer": adapter.transfer(concept),
     }
 
 
@@ -123,7 +125,7 @@ def activity_contracts_for_goal(
 ) -> list[dict[str, Any]]:
     """Return a deterministic route whose activities all share one schema."""
     adapter = get_domain_adapter(title, domain)
-    domain_contract = _domain_contract(adapter.key)
+    domain_contract = _domain_contract(adapter.key, title)
     sequence = [(activity_type, f"{activity_type.replace('_', ' ').title()} the concept") for activity_type in adapter.activity_sequence]
 
     items: list[dict[str, Any]] = []

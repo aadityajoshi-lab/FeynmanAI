@@ -1,6 +1,10 @@
 from pathlib import Path
+import base64
+import json
 import os
 from dotenv import dotenv_values, load_dotenv
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
@@ -11,6 +15,45 @@ def configured(name: str, default: str = "") -> str:
     """Prefer the explicit local env file so an inherited host key cannot surprise the UI."""
     value = LOCAL_ENV.get(name)
     return str(value) if value is not None else os.getenv(name, default)
+
+
+def _urlsafe_b64_int(value: object) -> int:
+    encoded = str(value or "").strip()
+    if not encoded:
+        raise ValueError("missing JWK integer")
+    padded = encoded + "=" * (-len(encoded) % 4)
+    return int.from_bytes(base64.urlsafe_b64decode(padded.encode("ascii")), "big")
+
+
+def _jwk_to_public_pem(jwk: object) -> str:
+    if not isinstance(jwk, dict) or str(jwk.get("kty") or "").upper() != "RSA":
+        raise ValueError("only RSA public JWKs are supported")
+    numbers = rsa.RSAPublicNumbers(_urlsafe_b64_int(jwk.get("e")), _urlsafe_b64_int(jwk.get("n")))
+    return numbers.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+
+
+def _configured_clerk_jwt_key() -> str:
+    encoded = configured("CLERK_JWT_KEY_B64", "").strip()
+    if encoded:
+        try:
+            padded = encoded + "=" * (-len(encoded) % 4)
+            return base64.b64decode(padded.encode("ascii"), validate=True).decode("utf-8").strip()
+        except (UnicodeDecodeError, ValueError):
+            return ""
+    jwks_path = BASE_DIR / "clerk_jwks.json"
+    if not jwks_path.exists():
+        return ""
+    try:
+        document = json.loads(jwks_path.read_text(encoding="utf-8"))
+        keys = document.get("keys") if isinstance(document, dict) else document
+        if not isinstance(keys, list) or not keys:
+            return ""
+        return _jwk_to_public_pem(keys[0])
+    except (OSError, ValueError, json.JSONDecodeError):
+        return ""
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "feynman-dev-only-secret")
 DEBUG = os.getenv("DJANGO_DEBUG", "true").lower() == "true"
 ALLOWED_HOSTS = [h.strip() for h in os.getenv("DJANGO_ALLOWED_HOSTS", "*").split(",") if h.strip()]
@@ -64,6 +107,7 @@ WSGI_APPLICATION = "feynman_api.wsgi.application"
 DATABASES = {"default": {
     "ENGINE": "django.db.backends.sqlite3",
     "NAME": BASE_DIR / "db.sqlite3",
+    "OPTIONS": {"timeout": 30},
 }}
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
@@ -83,6 +127,7 @@ REST_FRAMEWORK = {
     "UNAUTHENTICATED_USER": None,
 }
 CLERK_SECRET_KEY = configured("CLERK_SECRET_KEY", "")
+CLERK_JWT_KEY = _configured_clerk_jwt_key()
 CLERK_AUTHORIZED_PARTIES = [
     origin.strip()
     for origin in configured(
@@ -91,9 +136,10 @@ CLERK_AUTHORIZED_PARTIES = [
     ).split(",")
     if origin.strip()
 ]
-LLM_PROVIDER = configured("LLM_PROVIDER", "fixture").lower()
-OPENAI_MODEL = configured("OPENAI_MODEL", "gpt-5.6")
+LLM_PROVIDER = configured("LLM_PROVIDER", "qwen").lower()
+OPENAI_MODEL = configured("OPENAI_MODEL", "gpt-5.6-terra-high")
 OPENAI_API_KEY = configured("OPENAI_API_KEY", "")
+OPENAI_BASE_URL = configured("OPENAI_BASE_URL", "")
 FIREWORKS_API_KEY = configured("FIREWORKS_API_KEY", "")
 FIREWORKS_MODEL = configured("FIREWORKS_MODEL", "accounts/fireworks/models/qwen3p7-plus")
 FIREWORKS_BASE_URL = configured("FIREWORKS_BASE_URL", "https://api.fireworks.ai/inference/v1")
@@ -118,6 +164,8 @@ TAVILY_API_KEY = configured("TAVILY_API_KEY", "")
 TAVILY_BASE_URL = configured("TAVILY_BASE_URL", "https://api.tavily.com")
 SEARXNG_BASE_URL = configured("SEARXNG_BASE_URL", "")
 WEB_SEARCH_TIMEOUT_SECONDS = float(configured("WEB_SEARCH_TIMEOUT_SECONDS", "25"))
+WEB_SOURCE_TIMEOUT_SECONDS = float(configured("WEB_SOURCE_TIMEOUT_SECONDS", "30"))
+WEB_SOURCE_MAX_BYTES = int(configured("WEB_SOURCE_MAX_BYTES", str(25 * 1024 * 1024)))
 # The bounded study-source endpoint validates uploads at 50 MiB. Keep the
 # request parser just above that ceiling and spool larger files to disk rather
 # than rejecting ordinary lecture PDFs before the endpoint can inspect them.

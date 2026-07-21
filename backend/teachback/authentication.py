@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 import uuid
 from typing import Any
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.db import OperationalError, transaction
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
 
@@ -59,7 +60,7 @@ def _username_for_clerk_id(clerk_user_id: str) -> str:
 
 
 @transaction.atomic
-def _user_for_clerk_payload(payload: dict[str, Any], request) -> Any:
+def _provision_user_for_clerk_payload(payload: dict[str, Any], request) -> Any:
     User = get_user_model()
     clerk_user_id = _claim_value(payload, "sub")
     if not clerk_user_id:
@@ -116,6 +117,20 @@ def _user_for_clerk_payload(payload: dict[str, Any], request) -> Any:
     return user
 
 
+def _user_for_clerk_payload(payload: dict[str, Any], request) -> Any:
+    """Provision a Clerk identity with a short retry for SQLite write locks."""
+    for attempt in range(4):
+        try:
+            return _provision_user_for_clerk_payload(payload, request)
+        except OperationalError as exc:
+            detail = str(exc).casefold()
+            if "locked" not in detail and "busy" not in detail:
+                raise
+            if attempt == 3:
+                raise
+            time.sleep(0.05 * (2 ** attempt))
+
+
 class ClerkAuthentication(BaseAuthentication):
     """Authenticate Clerk session tokens without replacing local sessions."""
 
@@ -134,6 +149,7 @@ class ClerkAuthentication(BaseAuthentication):
                 request,
                 AuthenticateRequestOptions(
                     secret_key=secret_key,
+                    jwt_key=getattr(settings, "CLERK_JWT_KEY", "") or None,
                     authorized_parties=getattr(settings, "CLERK_AUTHORIZED_PARTIES", None) or None,
                     accepts_token=["session_token"],
                 ),

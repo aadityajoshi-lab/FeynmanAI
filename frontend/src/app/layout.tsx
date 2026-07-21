@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
 import { ClerkAuthBridge } from "@/components/ClerkAuthBridge";
 import "./globals.css";
+import "katex/dist/katex.min.css";
 import "./learning-os.css";
 import "./source-desk.css";
 

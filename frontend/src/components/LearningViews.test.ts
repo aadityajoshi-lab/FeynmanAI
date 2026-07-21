@@ -38,6 +38,21 @@ describe("Learning OS real-state surface", () => {
     expect(views).toContain("What you will learn");
   });
 
+  it("keeps a visible fallback for goal sharing when clipboard access is unavailable", () => {
+    expect(views).toContain('const [shareUrl, setShareUrl] = useState("");');
+    expect(views).toContain('aria-label="Share link URL"');
+    expect(views).toContain('Open shared route');
+    expect(views).toContain("navigator.clipboard");
+    expect(learningStyles).toContain(".fos-share-link-fallback");
+  });
+
+  it("hydrates the learner identity before direct goal lookups", () => {
+    const workspace = views.slice(views.indexOf("export function LearningWorkspaceView"), views.indexOf("function ProviderFeedbackPanel"));
+    expect(workspace).toContain("await learningOsApi.me();");
+    expect(views).toContain("Warm the owned-goal catalog once");
+    expect(workspace).toContain("transient anonymous lookup");
+  });
+
   it("mounts provider feedback in the active workspace instead of leaving it in a dead return path", () => {
     const workspace = views.slice(views.indexOf("export function LearningWorkspaceView"), views.indexOf("function ProviderFeedbackPanel"));
     expect(workspace).toContain("<ProviderFeedbackPanel feedback={providerFeedback}");
@@ -54,5 +69,21 @@ describe("Learning OS real-state surface", () => {
     expect(courseCommand).toContain("managedCourse(courseId)");
     expect(courseBuilder).toContain("managedCourse(courseId)");
     expect(cohort).toContain("reviewableCourse(courseId)");
+  });
+
+  it("loads institution metrics from an authorized institution workspace", () => {
+    const institution = views.slice(views.indexOf("export function InstitutionHomeView"), views.indexOf("export function InstitutionMembersView"));
+    expect(institution).toContain("learningOsApi.workspaces()");
+    expect(institution).toContain('item.kind === "institution"');
+    expect(institution).toContain("institutionDashboard(workspace.workspaceId)");
+    expect(institution).toContain('new LearningOsApiError("Institution admin access is required.", 403, "role_required")');
+  });
+
+  it("keeps aggregate insights scoped to an authorized institution workspace", () => {
+    const insights = views.slice(views.indexOf("export function InstitutionInsightsView"));
+    expect(insights).toContain("learningOsApi.workspaces()");
+    expect(insights).toContain('item.kind === "institution"');
+    expect(insights).toContain("institutionDashboard(workspace.workspaceId)");
+    expect(insights).toContain('new LearningOsApiError("Institution admin access is required.", 403, "role_required")');
   });
 });

@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable
 
+from django.conf import settings
 from django.db import transaction
 
 from .curriculum_adapters import GENERIC_ADAPTER, get_domain_adapter
@@ -291,7 +292,7 @@ def _validate_proposal(raw: Any, *, allowed_source_ids: set[str], allowed_anchor
 
 
 def _provider_proposal(goal: LearningGoal, learner_level: str, spans: list[SourceSpan]) -> tuple[dict[str, Any], dict[str, Any]]:
-    provider = provider_for("fireworks")
+    provider = provider_for()
     request = {
         "goal": {"title": goal.title, "description": goal.description, "outcome": goal.outcome, "domain": goal.domain},
         "learnerLevel": learner_level,
@@ -300,7 +301,8 @@ def _provider_proposal(goal: LearningGoal, learner_level: str, spans: list[Sourc
     }
     raw = provider.compile_curriculum(request)
     proposal = _validate_proposal(raw, allowed_source_ids={span.source_id for span in spans}, allowed_anchor_ids={span.anchor_id for span in spans}, goal=goal, learner_level=learner_level)
-    return proposal, {"provider": "fireworks", "providerMode": getattr(provider, "mode", "live_fireworks"), "model": getattr(provider, "model", ""), "status": "completed"}
+    provider_id = "openai" if getattr(provider, "mode", "") == "live_openai" else "qwen" if getattr(provider, "mode", "") == "live_qwen" else "fireworks" if getattr(provider, "mode", "") == "live_fireworks" else "local"
+    return proposal, {"provider": provider_id, "providerMode": getattr(provider, "mode", "human_review"), "model": getattr(provider, "model", ""), "status": "completed"}
 
 
 def _materialize_payload(pack: CurriculumPack, version: CurriculumVersion, route: GoalCurriculumRoute) -> dict[str, Any]:
@@ -473,7 +475,9 @@ def compile_curriculum(goal: LearningGoal, learner_level: str, selected_sources:
     except (ProviderUnavailable, ProviderOutputError, NotImplementedError) as exc:
         provider_error = type(exc).__name__
         proposal = _fallback_proposal(goal, learner_level, spans)
-        provenance = {"provider": "fireworks", "providerMode": "deterministic_fallback", "status": "fallback", "errorCategory": provider_error}
+        configured = str(getattr(settings, "LLM_PROVIDER", "fixture") or "fixture").casefold()
+        attempted_provider = "qwen" if configured in {"qwen", "live_qwen"} else "openai" if configured in {"openai", "live_openai"} else "fireworks" if configured in {"fireworks", "live_fireworks"} else "local"
+        provenance = {"provider": attempted_provider, "providerMode": "deterministic_fallback", "status": "fallback", "errorCategory": provider_error}
     result = _persist_compilation(goal, proposal, sources=sources, fingerprint=fingerprint, provenance=provenance)
     result["compiler"] = {"mode": provenance.get("providerMode", "deterministic_fallback"), "providerErrorCategory": provider_error, "schemaVersion": "curriculum-proposal.v1"}
     return result

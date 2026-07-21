@@ -18,4 +18,10 @@ describe("Notebook notes source scope", () => {
     expect(workspace).toContain("sourceNotebook=");
     expect(workspace).toContain("values.indexOf(item) === index");
   });
+
+  it("uses an accessible in-app confirmation before source deletion", () => {
+    expect(workspace).not.toContain("window.confirm");
+    expect(workspace).toContain("Confirm remove ${source.title}");
+    expect(workspace).toContain("onCancelDelete={() => setConfirmingDeleteSource(null)}");
+  });
 });

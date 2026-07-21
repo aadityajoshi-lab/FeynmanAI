@@ -53,6 +53,20 @@ def test_every_supported_domain_receives_one_shared_structured_activity_contract
             assert configuration["sourceRequirements"]["mode"] == "required"
 
 
+def test_activity_contract_resolves_domain_remediation_and_transfer_templates() -> None:
+    configuration = activity_contracts_for_goal(
+        title="Build a causal timeline for a historical change",
+        domain="history",
+        prerequisites=[],
+        requires_source=False,
+        first_prompt="Compare the evidence map.",
+    )[0]["configuration"]
+
+    assert "{concept}" not in configuration["remediationTarget"]
+    assert "{concept}" not in configuration["transferTarget"]
+    assert "Build a causal timeline for a historical change" in configuration["remediationTarget"]
+
+
 @pytest.mark.django_db
 def test_structured_observable_attempt_persists_and_advances_with_deterministic_reason() -> None:
     client = APIClient()

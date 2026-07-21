@@ -18,11 +18,23 @@ from .notebook_pipeline import _section_asset_ids, _section_diagram, _section_pr
 from .providers import (
     ProviderOutputError,
     ProviderUnavailable,
-    fireworks_generation_configured,
+    active_generation_configured,
+    normalize_model_name,
     provider_for,
     record_provider_failure,
 )
 from .remediation_video_views import _generate_voice
+
+
+def _active_provider_metadata() -> tuple[str, str]:
+    configured = str(getattr(settings, "LLM_PROVIDER", "fixture") or "fixture").casefold()
+    if configured in {"openai", "live_openai"}:
+        return "openai", normalize_model_name(getattr(settings, "OPENAI_MODEL", "gpt-5.6-terra-high"), "gpt-5.6-terra-high")
+    if configured in {"qwen", "live_qwen"}:
+        return "qwen", str(getattr(settings, "FIREWORKS_MODEL", ""))
+    if configured in {"fireworks", "live_fireworks"}:
+        return "fireworks", str(getattr(settings, "FIREWORKS_MODEL", ""))
+    return "local_deterministic", "source-structure-v1"
 
 
 STOP_WORDS = {
@@ -312,8 +324,8 @@ def _source_excerpt_recovery(
         "groundedIn": "notebook" if source_context else "web",
         "fallbackUsed": bool(web.get("context")),
         "degraded": True,
-        "provider": "fireworks",
-        "model": settings.FIREWORKS_MODEL,
+        "provider": _active_provider_metadata()[0],
+        "model": _active_provider_metadata()[1],
         "providerStatus": "unavailable" if unavailable else "invalid_response",
         "providerErrorCategory": category,
         "providerUnavailable": unavailable,
@@ -333,7 +345,8 @@ def answer_notebook_question(pack: dict, question: str, *, allow_web_search: boo
     if not source_context and not web["context"]:
         return {"answer": "I could not find this in the uploaded notebook, and no web result was available. Try naming the topic or enable web fallback.", "sourceIds": [], "sourceAnchorIds": [], "webSources": [], "groundedIn": "insufficient", "fallbackUsed": False, "retrieval": retrieval}
     try:
-        result = provider_for("fireworks").answer_notebook_question({
+        provider = provider_for()
+        result = provider.answer_notebook_question({
             "question": question,
             "sourceContext": source_context,
             "webContext": web["context"],
@@ -347,7 +360,7 @@ def answer_notebook_question(pack: dict, question: str, *, allow_web_search: boo
         # page/block anchor.  Do not silently publish an uncited claim merely
         # because the model's prose looked plausible.
         if source_context and source_ids and not approved_anchors:
-            raise ProviderOutputError("Fireworks response omitted approved source citations")
+            raise ProviderOutputError("Teaching provider response omitted approved source citations")
         grounded = str(result.get("groundedIn") or ("mixed" if source_context and web["context"] else "web" if web["context"] else "notebook"))
         return {
             "answer": answer,
@@ -356,14 +369,14 @@ def answer_notebook_question(pack: dict, question: str, *, allow_web_search: boo
             "webSources": web["sources"],
             "groundedIn": grounded if grounded in {"notebook", "web", "mixed", "insufficient"} else "notebook",
             "fallbackUsed": bool(web["context"]),
-            "provider": "fireworks",
-            "model": settings.FIREWORKS_MODEL,
+            "provider": _active_provider_metadata()[0],
+            "model": _active_provider_metadata()[1],
             "providerStatus": "completed",
             "citationValidation": "passed",
             "retrieval": retrieval,
         }
     except (ProviderUnavailable, ProviderOutputError) as exc:
-        record_provider_failure("fireworks", _chat_provider_error_category(exc))
+        record_provider_failure(_active_provider_metadata()[0], _chat_provider_error_category(exc))
         fallback = _source_excerpt_recovery(
             sections=sections,
             source_context=source_context,
@@ -421,7 +434,56 @@ def _anchor_locations(sections: list[dict]) -> dict[str, dict]:
 
 
 def _artifact_text(value: object, field: str, *, minimum: int = 3, maximum: int = 1400) -> str:
-    text = " ".join(str(value or "").split())
+    raw_text = " ".join(str(value or "").split())
+    # Fireworks occasionally returns duplicate-glyph strings (for example
+    # ``RReeccuurrrreennccee``) even though the source pack is clean. Apply the
+    # same conservative repair used for PDF text layers before exposing model
+    # output in a learner-facing artifact. Ordinary words such as ``book``
+    # remain untouched because the repair only runs on a strong signal.
+    letters = [char for char in raw_text if char.isalpha()]
+    duplicate_pairs = sum(
+        1
+        for left, right in zip(raw_text, raw_text[1:])
+        if left.isalpha() and left.casefold() == right.casefold()
+    )
+    duplicate_ratio = duplicate_pairs / max(len(letters), 1)
+    text = raw_text
+    if duplicate_ratio >= 0.18:
+        # A few provider strings duplicate short chunks after the first pass,
+        # e.g. ``Tran-an-an-sformer``. Collapse only exact adjacent alphabetic
+        # n-gram repeats and repair common split words such as ``T he``.
+        def collapse_glyph_run(match: re.Match[str]) -> str:
+            run = match.group(0)
+            return match.group(1) * max(1, len(run) // 2)
+        text = re.sub(r"([A-Za-z])\1+", collapse_glyph_run, text)
+        text = re.sub(r"([.!?,;:])\1+", r"\1", text)
+        for size in (4, 3, 2):
+            pattern = re.compile(rf"([A-Za-z]{{{size}}})\1")
+            previous = None
+            while previous != text:
+                previous = text
+                text = pattern.sub(r"\1", text)
+        split_words = {
+            "the", "which", "what", "why", "how", "when", "where", "who",
+            "it", "to", "of", "in", "is", "as", "an", "on", "at", "by",
+            "be", "we", "he", "me", "do", "if", "so", "no", "or", "decode",
+            "encoder", "decoder",
+        }
+        def join_split(match: re.Match[str]) -> str:
+            joined = f"{match.group(1)}{match.group(2)}"
+            return joined.capitalize() if joined.casefold() in split_words else match.group(0)
+        text = re.sub(r"\b([A-Z])\s+([a-z]{1,8})\b", join_split, text)
+        # Qwen's duplicated-glyph output has one recurring transposition for
+        # this concept name; correct it only in the high-signal repair path.
+        text = re.sub(r"\btranasformer(s?)\b", r"Transformer\1", text, flags=re.IGNORECASE)
+    # A low-signal model typo can still duplicate an initial capital (for
+    # example ``Ooverview``). It is safe to collapse only an uppercase initial
+    # pair followed by a normal lowercase word.
+    def collapse_initial(match: re.Match[str]) -> str:
+        initial = match.group(1)
+        return initial.upper() + match.group(3) if initial.isupper() else initial + match.group(3)
+    text = re.sub(r"\b([A-Za-z])(\1)([a-z]{3,})\b", collapse_initial, text, flags=re.IGNORECASE)
+    text = " ".join(text.split())
     if len(text) < minimum:
         raise ProviderOutputError(f"Fireworks returned an incomplete artifact field: {field}")
     return text[:maximum]
@@ -477,13 +539,13 @@ def _normalized_provider_artifact(
     anchor_locations: dict[str, dict],
     allowed_asset_ids: list[str],
 ) -> tuple[str, dict]:
-    """Bind a Fireworks artifact to server-owned sources and citation anchors."""
+    """Bind a live-provider artifact to server-owned sources and citations."""
     if not isinstance(raw, dict):
-        raise ProviderOutputError("Fireworks returned an invalid artifact response")
+        raise ProviderOutputError("The live provider returned an invalid artifact response")
     title = _artifact_text(raw.get("title"), "title", maximum=240)
     provenance = _artifact_provenance(
-        provider="fireworks",
-        model=str(settings.FIREWORKS_MODEL),
+        provider=_active_provider_metadata()[0],
+        model=_active_provider_metadata()[1],
         status="completed",
         citation_validation="passed",
     )
@@ -702,7 +764,7 @@ def generate_notebook_artifact(pack: dict, artifact_type: str) -> tuple[str, dic
     selected_source_ids = [str(item) for item in pack.get("sources") or [] if str(item)]
     if not selected_source_ids:
         raise ValueError("Select at least one ready source with readable extracted content.")
-    if not fireworks_generation_configured():
+    if not active_generation_configured():
         title, payload = build_artifact_payload(pack, artifact_type)
         payload = dict(payload)
         payload["provenance"] = _artifact_provenance(
@@ -710,13 +772,13 @@ def generate_notebook_artifact(pack: dict, artifact_type: str) -> tuple[str, dic
             model="source-structure-v1",
             status="local_fallback_active",
             citation_validation="source-derived",
-            reason="fireworks_not_configured_or_fixture_mode",
+            reason="active_provider_not_configured_or_fixture_mode",
         )
         return title, payload
 
     sections = _artifact_sections(pack)
     if not sections:
-        raise ProviderOutputError("Selected sources have no readable extracted context for Fireworks generation")
+        raise ProviderOutputError("Selected sources have no readable extracted context for provider generation")
     anchor_locations = _anchor_locations(sections)
     allowed_anchor_ids = list(anchor_locations)
     if not allowed_anchor_ids:
@@ -730,7 +792,7 @@ def generate_notebook_artifact(pack: dict, artifact_type: str) -> tuple[str, dic
         and str(formula.get("sectionId") or "") in selected_section_ids
         and str(formula.get("text") or "").strip()
     ][:60]
-    raw = provider_for("fireworks").generate_notebook_artifact({
+    raw = provider_for().generate_notebook_artifact({
         "artifactType": artifact_type,
         "sourceIds": selected_source_ids,
         "sourceContext": _source_context(sections, pack.get("sourceCatalog")),
@@ -788,9 +850,9 @@ def generate_openmaic_lesson(pack: dict, question: str, *, allow_web_search: boo
         raise ProviderOutputError("There is no notebook or web context available for this lesson.")
     allowed_anchors = _anchors_for_sections(sections)
     allowed_asset_ids, asset_catalog = _assets_for_sections(pack, sections)
-    live_fireworks = fireworks_generation_configured()
-    if live_fireworks:
-        manifest = provider_for("fireworks").generate_openmaic_lesson({
+    live_provider = active_generation_configured()
+    if live_provider:
+        manifest = provider_for().generate_openmaic_lesson({
             "question": question,
             "sourceContext": source_context,
             # Notebook lessons are strictly selected-source scoped. The caller
@@ -804,7 +866,7 @@ def generate_openmaic_lesson(pack: dict, question: str, *, allow_web_search: boo
         manifest = _local_lesson_manifest(sections, question, allowed_anchors, allowed_asset_ids, web["context"])
     raw_slides = manifest.get("slides") if isinstance(manifest, dict) else None
     if not isinstance(raw_slides, list) or not 4 <= len(raw_slides) <= 8:
-        if live_fireworks:
+        if live_provider:
             raise ProviderOutputError("Fireworks returned an incomplete narrated lesson")
         manifest = _local_lesson_manifest(sections, question, allowed_anchors, allowed_asset_ids, web["context"])
         raw_slides = manifest["slides"]
@@ -813,21 +875,21 @@ def generate_openmaic_lesson(pack: dict, question: str, *, allow_web_search: boo
     slides: list[dict] = []
     for index, raw in enumerate(raw_slides[:8]):
         if not isinstance(raw, dict):
-            if live_fireworks:
+            if live_provider:
                 raise ProviderOutputError("Fireworks returned an invalid narrated-lesson slide")
             continue
         raw_anchors = raw.get("sourceAnchorIds") if isinstance(raw.get("sourceAnchorIds"), list) else []
         invalid_anchors = [str(item) for item in raw_anchors if str(item) not in set(allowed_anchors)]
         source_anchor_ids = [str(item) for item in raw_anchors if str(item) in set(allowed_anchors)]
-        if live_fireworks and (invalid_anchors or not source_anchor_ids):
+        if live_provider and (invalid_anchors or not source_anchor_ids):
             raise ProviderOutputError("Fireworks returned an unapproved or missing lesson citation")
         source_anchor_ids = list(dict.fromkeys(source_anchor_ids)) or topic_anchors
         raw_assets = raw.get("assetIds") if isinstance(raw.get("assetIds"), list) else []
         invalid_assets = [str(item) for item in raw_assets if str(item) not in set(allowed_asset_ids)]
-        if live_fireworks and invalid_assets:
+        if live_provider and invalid_assets:
             raise ProviderOutputError("Fireworks returned an unapproved lesson visual asset")
         asset_ids = [str(item) for item in raw_assets if str(item) in set(allowed_asset_ids)]
-        if live_fireworks:
+        if live_provider:
             title = _artifact_text(raw.get("title"), "lesson slide title", maximum=180)
             body = _artifact_text(raw.get("body"), "lesson slide body", minimum=20, maximum=1200)
             narration = _artifact_text(raw.get("narration"), "lesson narration", minimum=40, maximum=1800)
@@ -891,9 +953,8 @@ def generate_openmaic_lesson(pack: dict, question: str, *, allow_web_search: boo
         slides.append(slide)
     if len(slides) < 4:
         raise ProviderOutputError("OpenMAIC lesson returned too few usable scenes")
-    provider_id = "fireworks" if live_fireworks else "local_deterministic"
-    provider_model = str(settings.FIREWORKS_MODEL) if live_fireworks else "source-structure-v1"
-    provider_status = "completed" if live_fireworks else "local_fallback_active"
+    provider_id, provider_model = _active_provider_metadata() if live_provider else ("local_deterministic", "source-structure-v1")
+    provider_status = "completed" if live_provider else "local_fallback_active"
     return {
         "kind": "openmaic_lesson",
         "mode": "openmaic_native",
@@ -905,13 +966,13 @@ def generate_openmaic_lesson(pack: dict, question: str, *, allow_web_search: boo
         "providerId": provider_id,
         "providerModel": provider_model,
         "providerStatus": provider_status,
-        "citationValidation": "passed" if live_fireworks else "source-derived",
+    "citationValidation": "passed" if live_provider else "source-derived",
         "provenance": _artifact_provenance(
             provider=provider_id,
             model=provider_model,
             status=provider_status,
-            citation_validation="passed" if live_fireworks else "source-derived",
-            reason=None if live_fireworks else "fireworks_not_configured_or_fixture_mode",
+            citation_validation="passed" if live_provider else "source-derived",
+            reason=None if live_provider else "active_provider_not_configured_or_fixture_mode",
         ),
         "voiceProviderId": "voxcpm-python" if any(slide.get("audio") for slide in slides) else None,
         "slides": slides,

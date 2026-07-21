@@ -15,7 +15,9 @@ def test_provider_status_does_not_expose_keys(client):
     response = client.get("/api/v1/providers")
     assert response.status_code == 200
     body = response.json()
-    assert {item["id"] for item in body["providers"]} == {"mistral", "fireworks", "openai", "fixture"}
+    assert {item["id"] for item in body["providers"]} == {"mistral", "qwen", "fireworks", "openai", "fixture"}
+    qwen = next(item for item in body["providers"] if item["id"] == "qwen")
+    assert qwen["label"] == "Qwen (via Fireworks)"
     fireworks = next(item for item in body["providers"] if item["id"] == "fireworks")
     assert {"id", "label", "available", "model", "configured", "reachable", "status", "lastErrorCategory", "lastSuccessAt"}.issubset(fireworks)
     assert {"ready", "extracting", "failed", "localFallbackActive"}.issubset(body["sourceStatus"])

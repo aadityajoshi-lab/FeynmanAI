@@ -33,7 +33,11 @@
 .controlHeading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .controlHeading label, .selectControl label, .caseFields label, .generalPrompt label { font-size: 14px; font-weight: 700; }
 .controlHeading output { color: #383838; font-size: 13px; font-variant-numeric: tabular-nums; }
+.rangeInputRow { display: grid; grid-template-columns: 32px minmax(0, 1fr) 32px; align-items: center; gap: 8px; }
 .rangeControl input[type="range"] { width: 100%; min-height: 30px; margin: 0; accent-color: var(--wb-ink); }
+.stepButton { display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid #bdbdbd; border-radius: 7px; color: var(--wb-ink); background: #ffffff; font-size: 20px; line-height: 1; }
+.stepButton:hover:not(:disabled) { border-color: var(--wb-ink); background: #efefef; }
+.stepButton:disabled { color: #999999; background: #f1f1f1; }
 .rangeControl small { color: var(--wb-muted); font-size: 12px; line-height: 1.45; }
 .metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 0; }
 .metrics > div { min-width: 0; padding: 10px; border: 1px solid #d7d7d7; border-radius: 8px; background: #ffffff; }

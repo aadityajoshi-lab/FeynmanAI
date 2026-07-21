@@ -85,7 +85,7 @@ def _validate_manifest(plan: dict, allowed_anchors: set[str]) -> None:
         raise ProviderOutputError("study plan is missing required fields")
     if plan["chapterSelection"] not in {"chapter_1", "all"}:
         raise ProviderOutputError("unsupported chapter selection")
-    if plan["providerMode"] not in {"codex_fixture", "live_openai", "live_fireworks", "human_review"}:
+    if plan["providerMode"] not in {"codex_fixture", "live_openai", "live_qwen", "live_fireworks", "human_review"}:
         raise ProviderOutputError("unsupported provider mode")
     if not isinstance(plan["outline"], list) or not isinstance(plan["scenes"], list):
         raise ProviderOutputError("outline and scenes must be arrays")
@@ -105,7 +105,7 @@ def _validate_manifest(plan: dict, allowed_anchors: set[str]) -> None:
                 raise ProviderOutputError("assessment stage contains an unapproved source anchor")
             if not isinstance(stage.get("prompt"), str) or len(stage["prompt"].strip()) < 5:
                 raise ProviderOutputError("assessment stage is missing a learner-facing prompt")
-    if plan["providerMode"] in {"live_openai", "live_fireworks"}:
+    if plan["providerMode"] in {"live_openai", "live_qwen", "live_fireworks"}:
         staged_topics = [scene for scene in plan["scenes"] if scene.get("stages")]
         if staged_topics:
             if len(staged_topics) != len(plan["scenes"]):
@@ -176,9 +176,9 @@ class StudyPlanView(APIView):
         if not set(past_question_source_ids).issubset(set(source_ids)):
             return _error("past-question sources must also be included in sourceIds")
         provider_mode = str(body.get("provider") or body.get("providerMode") or settings.LLM_PROVIDER).strip().lower()
-        provider_aliases = {"fireworks": "fireworks", "live_fireworks": "fireworks", "qwen": "fireworks", "openai": "openai", "live_openai": "openai", "fixture": "fixture", "codex_fixture": "fixture"}
+        provider_aliases = {"qwen": "qwen", "live_qwen": "qwen", "fireworks": "fireworks", "live_fireworks": "fireworks", "openai": "openai", "live_openai": "openai", "fixture": "fixture", "codex_fixture": "fixture"}
         if provider_mode not in provider_aliases:
-            return _error("provider must be fireworks, openai, or fixture")
+            return _error("provider must be qwen, fireworks, openai, or fixture")
         try:
             if source_ids[0].startswith("guided:"):
                 source_spans, allowed_anchors, source_pack_version, review_required = _guided_source_context(
@@ -259,9 +259,9 @@ class StudyPlanInteractionView(APIView):
         if not isinstance(stage_anchors, list) or not stage_anchors or any(not isinstance(item, str) for item in stage_anchors):
             return _error("stage.sourceAnchorIds must be a non-empty list")
         provider_mode = str(body.get("provider") or settings.LLM_PROVIDER).strip().lower()
-        provider_aliases = {"fireworks": "fireworks", "live_fireworks": "fireworks", "qwen": "fireworks", "openai": "openai", "live_openai": "openai", "fixture": "fixture", "codex_fixture": "fixture"}
+        provider_aliases = {"qwen": "qwen", "live_qwen": "qwen", "fireworks": "fireworks", "live_fireworks": "fireworks", "openai": "openai", "live_openai": "openai", "fixture": "fixture", "codex_fixture": "fixture"}
         if provider_mode not in provider_aliases:
-            return _error("provider must be fireworks, openai, or fixture")
+            return _error("provider must be qwen, fireworks, openai, or fixture")
         try:
             source_spans, allowed_anchors, source_pack_version, review_required = _source_context([item.strip() for item in source_ids])
             if not set(scene_anchors).issubset(allowed_anchors):
@@ -318,9 +318,9 @@ class StudyPlanChatView(APIView):
         if not isinstance(source_ids, list) or not source_ids or len(source_ids) > 20 or any(not isinstance(item, str) or not item.strip() for item in source_ids):
             return _error("sourceIds must be a non-empty list of IDs")
         provider_mode = str(body.get("provider") or settings.LLM_PROVIDER).strip().lower()
-        provider_aliases = {"fireworks": "fireworks", "live_fireworks": "fireworks", "qwen": "fireworks", "openai": "openai", "live_openai": "openai", "fixture": "fixture", "codex_fixture": "fixture"}
+        provider_aliases = {"qwen": "qwen", "live_qwen": "qwen", "fireworks": "fireworks", "live_fireworks": "fireworks", "openai": "openai", "live_openai": "openai", "fixture": "fixture", "codex_fixture": "fixture"}
         if provider_mode not in provider_aliases:
-            return _error("provider must be fireworks, openai, or fixture")
+            return _error("provider must be qwen, fireworks, openai, or fixture")
         raw_scenes = body.get("scenes")
         if not isinstance(raw_scenes, list) or not raw_scenes or len(raw_scenes) > 40:
             return _error("scenes must be a non-empty list")
@@ -462,8 +462,14 @@ class ProviderStatusView(APIView):
         return Response({
             "providers": [
                 provider_entry(provider_id="mistral", label="Mistral OCR", configured=bool(settings.MISTRAL_API_KEY), model=settings.MISTRAL_OCR_MODEL, runtime_id="mistral"),
-                provider_entry(provider_id="fireworks", label="Fireworks", configured=bool(settings.FIREWORKS_API_KEY), model=settings.FIREWORKS_MODEL, runtime_id="fireworks"),
-                provider_entry(provider_id="openai", label="OpenAI", configured=bool(settings.OPENAI_API_KEY), model=settings.OPENAI_MODEL),
+                provider_entry(provider_id="qwen", label="Qwen (via Fireworks)", configured=bool(settings.FIREWORKS_API_KEY), model=settings.FIREWORKS_MODEL, runtime_id="qwen"),
+                provider_entry(provider_id="fireworks", label="Fireworks (legacy)", configured=bool(settings.FIREWORKS_API_KEY), model=settings.FIREWORKS_MODEL, runtime_id="fireworks"),
+                provider_entry(
+                    provider_id="openai",
+                    label="OpenAI (via OmniRoute)" if getattr(settings, "OPENAI_BASE_URL", "") else "OpenAI",
+                    configured=bool(settings.OPENAI_API_KEY),
+                    model=settings.OPENAI_MODEL,
+                ),
                 {"id": "fixture", "label": "Local fixture", "available": True, "model": "fixture-v1", "configured": True, "reachable": True, "status": "local_fallback_active", "lastErrorCategory": None, "lastSuccessAt": None},
             ],
             "defaultProvider": settings.LLM_PROVIDER,

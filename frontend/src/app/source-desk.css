@@ -280,6 +280,34 @@
 .nlm-shell .nlm-composer textarea { color: #111 !important; font-family: "Work Sans", sans-serif !important; font-size: 15px !important; }
 .nlm-shell .nlm-composer button { color: #fff !important; background: #111 !important; }
 
+.nlm-rich-text { min-width: 0; overflow-wrap: anywhere; color: inherit; }
+.nlm-rich-text p { margin: 0; white-space: normal; }
+.nlm-rich-text p + p,
+.nlm-rich-text p + ul,
+.nlm-rich-text p + ol,
+.nlm-rich-text ul + p,
+.nlm-rich-text ol + p { margin-top: .85rem; }
+.nlm-rich-text h2,
+.nlm-rich-text h3,
+.nlm-rich-text h4 { margin: 0 0 .7rem; color: inherit; line-height: 1.25; letter-spacing: -.02em; }
+.nlm-rich-text h2 { font-size: 1.25em; }
+.nlm-rich-text h3 { font-size: 1.12em; }
+.nlm-rich-text h4 { font-size: 1em; }
+.nlm-rich-text ul,
+.nlm-rich-text ol { margin: .75rem 0 0; padding-left: 1.35rem; }
+.nlm-rich-text li + li { margin-top: .35rem; }
+.nlm-rich-text code { padding: .12em .35em; border: 1px solid #e1e1da; border-radius: 3px; color: #242424; background: #f4f4ef; font: .9em ui-monospace, SFMono-Regular, Consolas, monospace; }
+.nlm-rich-text pre { max-width: 100%; margin: .9rem 0 0; overflow: auto; padding: .8rem; border: 1px solid #e1e1da; color: #242424; background: #f4f4ef; font: .85em/1.55 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre; }
+.nlm-rich-text pre code { padding: 0; border: 0; background: transparent; }
+.nlm-math-inline { display: inline-block; max-width: 100%; vertical-align: -.15em; }
+.nlm-math-block { max-width: 100%; margin: 1rem 0; overflow-x: auto; overflow-y: hidden; padding: .55rem .25rem; color: #202020 !important; text-align: center; }
+.nlm-math-block .katex-display { margin: 0; min-width: max-content; text-align: center; }
+.nlm-math-fallback { color: #7f1d1d !important; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; }
+.nlm-message.pending .nlm-message-content { border-style: dashed; }
+.nlm-message.failed .nlm-message-content { border-color: #c7a29b; }
+.nlm-message-status { display: block; margin-top: 8px; color: #747474; font-size: 10px; }
+.nlm-shell .katex { color: #202020; }
+
 @media (max-width: 680px) {
   .nlm-shell .nlm-workspace { padding: 8px; }
   .nlm-shell .nlm-proof-canvas { background-size: 20px 20px !important; }
