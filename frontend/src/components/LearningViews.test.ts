@@ -21,6 +21,16 @@ describe("Learning OS real-state surface", () => {
     expect(learningStyles).toContain("--fos-accent: #315efb");
   });
 
+  it("keeps the evidence goal filter bounded inside the wide page shell", () => {
+    expect(views).toContain('title="What you have demonstrated" wide');
+    expect(learningStyles).toContain(".fos-evidence-filter { position: relative; display: inline-flex; width: min(320px, 100%);");
+    expect(views).toContain('aria-haspopup="listbox"');
+    expect(views).toContain('role="listbox"');
+    expect(views).not.toContain('<select value={goalFilter}');
+    expect(learningStyles).toContain(".fos-evidence-filter-menu");
+    expect(learningStyles).toContain(".fos-evidence-filter-option");
+  });
+
   it("renders real source and evidence state in the goal flow", () => {
     expect(views).toContain("listNotebooks()");
     expect(views).toContain("Source extraction");

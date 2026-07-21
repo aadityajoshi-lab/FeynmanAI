@@ -96,7 +96,7 @@ export type ActivityProviderEvaluation = {
   sourceAnchorIds?: string[];
 };
 
-/** Safe provenance for a server-side Fireworks evaluation. This deliberately
+/** Safe provenance for a server-side OpenAI evaluation. This deliberately
  * contains model identity and failure category, never credentials or prompts. */
 export type ActivityProviderFeedback = {
   provider: string;

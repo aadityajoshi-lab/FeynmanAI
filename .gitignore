@@ -35,3 +35,11 @@ Thumbs.db
 # Local browser verification captures (not source assets)
 artifacts-*.png
 artifacts-*.jpg
+
+# Submission-only local materials; keep these out of source pushes.
+outputs/
+HACKATHON_SUBMISSION*.md
+SUBMISSION.md
+handoff.md
+docs/AGENT_HANDOFF_REPORTS.md
+docs/OPENAI_RUNBOOK.md

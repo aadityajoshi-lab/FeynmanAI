@@ -57,14 +57,14 @@ def _usable_slide_text(value: object, minimum: int) -> bool:
 
 def _validate_slide_manifest(manifest: dict, allowed_anchors: set[str], fallback_anchors: list[str] | None = None) -> list[dict]:
     if not isinstance(manifest, dict) or not isinstance(manifest.get("slides"), list):
-        raise ProviderOutputError("Fireworks returned no slide lesson")
+        raise ProviderOutputError("OpenAI returned no slide lesson")
     slides = manifest["slides"]
     if not 1 <= len(slides) <= 8:
-        raise ProviderOutputError("Fireworks slide lesson must contain at least one slide and no more than 8 slides")
+        raise ProviderOutputError("OpenAI slide lesson must contain at least one slide and no more than 8 slides")
     cleaned: list[dict] = []
     for index, slide in enumerate(slides):
         if not isinstance(slide, dict):
-            raise ProviderOutputError("Fireworks returned an invalid remediation slide")
+            raise ProviderOutputError("OpenAI returned an invalid remediation slide")
         anchors = slide.get("sourceAnchorIds") if isinstance(slide.get("sourceAnchorIds"), list) else []
         # The model can describe the lesson, but it does not own provenance.
         # Rebind every slide to the already-validated topic anchors. This keeps
@@ -192,7 +192,7 @@ def _generate_voice(text: str) -> dict | None:
     return {"dataUrl": f"data:{mime};base64,{base64.b64encode(audio).decode('ascii')}", "format": format_name, "providerId": "voxcpm-python"}
 
 
-def _fireworks_slide_lesson(*, topic_title: str, stage_kind: str, mistake: str, correct_answer: str, correction: str, remediation: str, source_context: str, allowed_anchors: set[str], scene_anchors: list[str], requested_duration: int) -> dict:
+def _openai_slide_lesson(*, topic_title: str, stage_kind: str, mistake: str, correct_answer: str, correction: str, remediation: str, source_context: str, allowed_anchors: set[str], scene_anchors: list[str], requested_duration: int) -> dict:
     provider = provider_for()
     manifest = provider.generate_remediation_slides({
         "topicTitle": topic_title,
@@ -241,11 +241,11 @@ class StudyRemediationVideoConfigView(APIView):
 
     def get(self, request):
         mode = settings.REMEDIATION_VIDEO_PROVIDER
-        rendered = mode != "fireworks-slides"
+        rendered = mode != "openai-slides"
         return Response({
-            "mode": "sequenced_clips" if rendered else "fireworks_slides",
-            "provider": "configured video provider" if rendered else "fireworks-qwen3p7-plus",
-            "label": "Rendered video clips" if rendered else "Fireworks narrated slides",
+            "mode": "sequenced_clips" if rendered else "openai_slides",
+            "provider": "configured video provider" if rendered else "openai",
+            "label": "Rendered video clips" if rendered else "OpenAI narrated slides",
             "configured": active_generation_configured() if not rendered else bool(settings.VIDEO_SERVICE_BASE_URL and settings.VIDEO_SERVICE_KEY),
             "voiceConfigured": bool(settings.TTS_VOXCPM_BASE_URL),
             "minDurationSeconds": 60,
@@ -258,7 +258,7 @@ class StudyRemediationVideoView(APIView):
     """Create a source-bounded remediation lesson."""
 
     def post(self, request):
-        if settings.REMEDIATION_VIDEO_PROVIDER != "fireworks-slides" and (not settings.VIDEO_SERVICE_BASE_URL or not settings.VIDEO_SERVICE_KEY):
+        if settings.REMEDIATION_VIDEO_PROVIDER != "openai-slides" and (not settings.VIDEO_SERVICE_BASE_URL or not settings.VIDEO_SERVICE_KEY):
             return _error("The self-contained remediation video service is not configured", "video_provider_unavailable", status.HTTP_503_SERVICE_UNAVAILABLE)
 
         body = request.data if isinstance(request.data, dict) else {}
@@ -294,9 +294,9 @@ class StudyRemediationVideoView(APIView):
             if not source_context:
                 return _error("approved source context is unavailable", "source_extraction_pending")
 
-            if settings.REMEDIATION_VIDEO_PROVIDER == "fireworks-slides":
+            if settings.REMEDIATION_VIDEO_PROVIDER == "openai-slides":
                 try:
-                    lesson = _fireworks_slide_lesson(
+                    lesson = _openai_slide_lesson(
                         topic_title=topic_title,
                         stage_kind=stage_kind,
                         mistake=mistake,

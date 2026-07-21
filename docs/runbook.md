@@ -98,24 +98,17 @@ The backend suite covers goals, evidence, sharing/revocation, source scoping/del
 
 Provider credentials are server-only. Goal creation, contracts, routes, and evidence records do not require a browser-visible provider key.
 
-The legacy dynamic-module builder uses Fireworks when configured:
-
-```text
-LLM_PROVIDER=fireworks
-FIREWORKS_API_KEY=your-fireworks-key
-FIREWORKS_MODEL=accounts/fireworks/models/qwen3p7-plus
-FIREWORKS_BASE_URL=https://api.fireworks.ai/inference/v1
-```
-
-OpenAI remains an optional server-side live provider:
+The dynamic-module builder uses OpenAI when configured:
 
 ```text
 LLM_PROVIDER=openai
-OPENAI_MODEL=gpt-5.6
-OPENAI_API_KEY=your-server-side-key
+LLM_PROVIDER=openai
+OPENAI_API_KEY=your-openai-api-key
+OPENAI_MODEL=gpt-5.6-terra-high
+OPENAI_BASE_URL=
 ```
 
-Optional source OCR can be configured with `MISTRAL_API_KEY`; without it, the local extraction path is used where supported. Never place Fireworks, OpenAI, Mistral, narration, or other provider keys in `frontend/.env.local` or browser code. A failed live provider call must remain a visible provider failure; the deterministic fixture is retained for automated tests and must not silently replace a failed live result.
+Optional source OCR can be configured with `MISTRAL_API_KEY`; without it, the local extraction path is used where supported. Never place OpenAI, OpenAI, Mistral, narration, or other provider keys in `frontend/.env.local` or browser code. A failed live provider call must remain a visible provider failure; the deterministic fixture is retained for automated tests and must not silently replace a failed live result.
 
 ## Secondary legacy study paths
 

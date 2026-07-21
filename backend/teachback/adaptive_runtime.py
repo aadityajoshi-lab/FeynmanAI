@@ -238,7 +238,7 @@ def _semantic_quality(configuration: dict[str, Any], attempt: dict[str, Any], so
     """Score observable meaning, not prose volume.
 
     These checks are deliberately explainable and persisted with the decision.
-    Fireworks may critique the response, but it cannot bypass these signals.
+    OpenAI may critique the response, but it cannot bypass these signals.
     """
     written = str(attempt.get("writtenExplanation") or "")
     conclusion = str(attempt.get("learnerConclusion") or "")

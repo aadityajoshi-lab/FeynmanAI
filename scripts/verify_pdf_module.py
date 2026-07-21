@@ -57,7 +57,7 @@ def main() -> int:
             "moduleId": "chapter-7",
             "sourceIds": [upload_body["sourceId"]],
             "chapterSelection": "chapter_1",
-            "provider": "fireworks",
+            "provider": "openai",
         },
         timeout=180,
     )

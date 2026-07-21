@@ -190,9 +190,9 @@ def test_goal_contract_records_observed_and_source_backed_verified_evidence() ->
 
 
 @pytest.mark.django_db
-def test_configured_fireworks_activity_feedback_is_source_scoped_and_persists_provenance() -> None:
+def test_configured_openai_activity_feedback_is_source_scoped_and_persists_provenance() -> None:
     client = APIClient()
-    _register(client, "fireworks-activity@example.com")
+    _register(client, "openai-activity@example.com")
     goal = _goal(client, "Explain source-bounded signal sampling")
     notebook = client.post("/api/v1/notebooks", {"title": "Signal notes", "goalId": goal["goalId"]}, format="json")
     assert notebook.status_code == 201
@@ -213,8 +213,8 @@ def test_configured_fireworks_activity_feedback_is_source_scoped_and_persists_pr
 
     captured: dict = {}
 
-    class FakeFireworks:
-        mode = "live_fireworks"
+    class FakeOpenAI:
+        mode = "live_openai"
 
         def evaluate_checkpoint(self, request):
             captured.update(request)
@@ -234,11 +234,11 @@ def test_configured_fireworks_activity_feedback_is_source_scoped_and_persists_pr
                 "retryOptions": None,
                 "retryResponseType": None,
                 "retrySourceAnchorIds": [],
-                "providerMode": "live_fireworks",
+                "providerMode": "live_openai",
             }
 
-    with override_settings(FIREWORKS_API_KEY="configured-for-test"):
-        with patch("teachback.learning_os_views.provider_for", return_value=FakeFireworks()):
+    with override_settings(OPENAI_API_KEY="configured-for-test"):
+        with patch("teachback.learning_os_views.provider_for", return_value=FakeOpenAI()):
             response = client.post(
                 f"/api/v1/goals/{goal['goalId']}/attempts",
                 {
@@ -266,9 +266,73 @@ def test_configured_fireworks_activity_feedback_is_source_scoped_and_persists_pr
 
 
 @pytest.mark.django_db
-def test_configured_fireworks_failure_records_attempt_but_never_verifies_evidence() -> None:
+def test_incorrect_source_grounded_checkpoint_retries_and_never_verifies_or_advances() -> None:
     client = APIClient()
-    _register(client, "fireworks-failure@example.com")
+    _register(client, "incorrect-checkpoint@example.com")
+    goal = _goal(client, "Explain source-bounded CPU scheduling")
+    notebook = client.post("/api/v1/notebooks", {"title": "Scheduling notes", "goalId": goal["goalId"]}, format="json")
+    assert notebook.status_code == 201
+    source = client.post(
+        f"/api/v1/notebooks/{notebook.json()['notebookId']}/sources/text",
+        {"title": "Round Robin source", "text": "Round Robin cycles through runnable processes using a fixed quantum instead of choosing the shortest job.", "useForGrounding": True},
+        format="json",
+    )
+    assert source.status_code == 201
+    source_row = source.json()["sources"][0]
+
+    class FakeProvider:
+        mode = "live_openai"
+
+        def evaluate_checkpoint(self, request):
+            return {
+                "state": "complete",
+                "correct": False,
+                "understandingScore": 10,
+                "overconfidence": False,
+                "feedback": "This describes shortest-job-first, not Round Robin.",
+                "remediation": "Trace one fixed-quantum rotation through the ready queue.",
+                "mistake": "The response confuses Round Robin with shortest-job-first.",
+                "correctAnswer": "Round Robin rotates runnable processes after each fixed quantum.",
+                "correction": "Use a queue rotation rather than shortest-job selection.",
+                "nextAction": "retry",
+                "sourceAnchorIds": [source_row["anchorIds"][0]],
+                "retryPrompt": "Trace the next three fixed-quantum slices.",
+                "retryOptions": None,
+                "retryResponseType": None,
+                "retrySourceAnchorIds": [],
+                "providerMode": "live_openai",
+            }
+
+    with override_settings(OPENAI_API_KEY="configured-for-test"):
+        with patch("teachback.learning_os_views.provider_for", return_value=FakeProvider()):
+            response = client.post(
+                f"/api/v1/goals/{goal['goalId']}/attempts",
+                {
+                    "activityId": goal["activities"][0]["activityId"],
+                    "response": "Round Robin gives the whole CPU to the shortest process first, so the first job finishes before the other runnable jobs receive a turn.",
+                    "learnerConclusion": "I think shorter jobs always run before later arrivals.",
+                    "sourceIds": [source_row["sourceId"]],
+                    "sourceAnchorIds": [source_row["anchorIds"][0]],
+                    "confidence": 3,
+                    "interactionState": {"mode": "source_proof"},
+                },
+                format="json",
+            )
+
+    assert response.status_code == 200, response.content
+    body = response.json()
+    assert body["feedback"]["evaluation"]["correct"] is False
+    assert body["evidence"]["status"] == "needs_review"
+    assert body["evidence"]["transitionReason"] == "provider_identified_misconception"
+    assert body["adaptiveRoute"]["nextAction"] == "retry"
+    assert body["adaptiveRoute"]["activeActivityId"] == goal["activities"][0]["activityId"]
+    assert body["goal"]["activities"][0]["status"] == "needs_revision"
+
+
+@pytest.mark.django_db
+def test_configured_openai_failure_records_attempt_but_never_verifies_evidence() -> None:
+    client = APIClient()
+    _register(client, "openai-failure@example.com")
     goal = _goal(client, "Explain a source-bounded scheduler")
     notebook = client.post("/api/v1/notebooks", {"title": "Scheduler notes", "goalId": goal["goalId"]}, format="json")
     source = client.post(
@@ -279,7 +343,7 @@ def test_configured_fireworks_failure_records_attempt_but_never_verifies_evidenc
     assert source.status_code == 201
     source_row = source.json()["sources"][0]
 
-    with override_settings(FIREWORKS_API_KEY="configured-for-test"):
+    with override_settings(OPENAI_API_KEY="configured-for-test"):
         with patch("teachback.learning_os_views.provider_for", side_effect=ProviderUnavailable("request timed out")):
             response = client.post(
                 f"/api/v1/goals/{goal['goalId']}/attempts",

@@ -12,13 +12,13 @@ type StudyDraft = {
   subjectTitle?: string;
   moduleId?: string;
   chapterTitle?: string;
-  provider?: "fireworks" | "openai" | "fixture";
+  provider?: "openai" | "fixture";
   providerMode?: string;
   sourceIds?: string[];
   assets?: StudyAsset[];
   learningMode?: string;
   remediationVideoDurationSeconds?: number;
-  remediationVideoConfig?: { mode: "fireworks_slides" | "sequenced_clips"; label: string; provider: string; configured: boolean; voiceConfigured: boolean };
+  remediationVideoConfig?: { mode: "openai_slides" | "sequenced_clips"; label: string; provider: string; configured: boolean; voiceConfigured: boolean };
   learningGoal?: "course" | "skill" | "interview" | "viva";
   goalBrief?: string;
   assessmentFocus?: "mastery" | "mock_test" | "conversation" | "viva";
@@ -341,7 +341,7 @@ export default function StudyWorkspace() {
     try {
       const result = await interactWithStudyPlan({
         sourceIds: draft.plan.sourceIds,
-        provider: draft.provider ?? "fireworks",
+        provider: draft.provider ?? "openai",
         kind,
         response,
         confidence: confidence[stage.stageId] ?? 3,
@@ -436,7 +436,7 @@ export default function StudyWorkspace() {
         subjectTitle: draft.subjectTitle,
         moduleId: draft.moduleId,
         sourceIds: draft.plan.sourceIds,
-        provider: draft.provider ?? "fireworks",
+        provider: draft.provider ?? "openai",
         message,
         history,
         activeSceneId: activeScene?.sceneId,
@@ -544,7 +544,7 @@ export default function StudyWorkspace() {
 }
 
 function RemediationVideoPlayer({ video }: { video: StudyRemediationVideo }) {
-  if (video.mode === "fireworks_slides") return <FireworksSlidePlayer video={video} />;
+  if (video.mode === "openai_slides") return <OpenAISlidePlayer video={video} />;
   return <RemediationClipPlayer video={video} />;
 }
 
@@ -584,7 +584,7 @@ function RemediationClipPlayer({ video }: { video: Extract<StudyRemediationVideo
   return <div className="study-remediation-player"><video ref={videoRef} key={clip.url} controls playsInline preload="metadata" poster={clip.poster} src={clip.url} onPlay={playNarration} onPause={pauseNarration} onSeeking={syncNarration} onEnded={nextClip} />{clip.narration && <><audio ref={audioRef} key={clip.narration.dataUrl} controls preload="metadata" src={clip.narration.dataUrl} /><small className="study-narration-note">Narration generated with the configured VoxCPM Python voice.</small></>}<nav className="study-video-segments" aria-label="Remediation video segments">{video.clips.map((item, index) => <button key={item.index} type="button" className={index === clipIndex ? "active" : ""} onClick={() => { audioRef.current?.pause(); setClipIndex(index); }}>{index === clipIndex && playing ? "Playing · " : ""}<span>{String(index + 1).padStart(2, "0")}</span>{item.title}</button>)}</nav><div className="study-video-progress"><span>{video.title}</span><small>{video.providerId} · segment {clipIndex + 1} of {video.clips.length} · about {Math.round(video.actualDurationSeconds)} seconds total · {clip.width}×{clip.height}</small></div></div>;
 }
 
-function FireworksSlidePlayer({ video }: { video: Extract<StudyRemediationVideo, { mode: "fireworks_slides" }> }) {
+function OpenAISlidePlayer({ video }: { video: Extract<StudyRemediationVideo, { mode: "openai_slides" }> }) {
   const [slideIndex, setSlideIndex] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [browserVoiceAvailable, setBrowserVoiceAvailable] = useState(false);
@@ -648,7 +648,7 @@ function FireworksSlidePlayer({ video }: { video: Extract<StudyRemediationVideo,
 function InteractionResult({ result, canContinue, videoConfig, videoState, onGenerateVideo, onSimilarRetry, onRetry, onContinue }: { result: StudyInteractionResponse; canContinue: boolean; videoConfig?: StudyDraft["remediationVideoConfig"]; videoState?: VideoUiState; onGenerateVideo: () => void; onSimilarRetry: () => void; onRetry: () => void; onContinue: () => void }) {
   const message = result.feedback || result.answer || result.explanation || result.reasonCode || result.state || "The provider returned a result.";
   const videoLabel = videoConfig?.label || "Source-grounded remediation video";
-  const videoDescription = videoConfig?.mode === "sequenced_clips" ? "OpenMAIC-style rendered clips are generated in short ordered segments, then presented as one correction lesson." : "Fireworks Qwen creates a source-grounded slide lesson; the configured local Python voice reads it aloud when available.";
+  const videoDescription = videoConfig?.mode === "sequenced_clips" ? "OpenMAIC-style rendered clips are generated in short ordered segments, then presented as one correction lesson." : "OpenAI creates a source-grounded slide lesson; the configured local Python voice reads it aloud when available.";
   const [readOpen, setReadOpen] = useState(true);
   return <div className={`study-interaction-result ${result.correct === false ? "needs-review" : "passed"}`} role="status"><strong>{result.correct ? "Understanding confirmed" : result.correct === false ? "Review this idea before moving on" : result.state || "complete"}</strong><p>{message}</p>{result.correct === false && result.mistake && <p className="study-mistake"><strong>Where it went wrong:</strong> {result.mistake}</p>}{result.correct === false && result.correctAnswer && <p className="study-correction"><strong>Correct answer:</strong> {result.correctAnswer}</p>}{result.correct === false && result.correction && <p><strong>How to fix it:</strong> {result.correction}</p>}{result.remediation && <p><strong>Review next:</strong> {result.remediation}</p>}{typeof result.understandingScore === "number" && <span>Understanding: {result.understandingScore}%</span>}{result.overconfidence && <span className="study-overconfidence">Confidence was higher than the demonstrated understanding. Slow down and use the remediation below.</span>}{result.correct === false && <><div className="study-remediation-options"><article className="study-correction-guide"><div className="study-remediation-card-head"><div><strong>1 · Read yourself</strong><span>Text explanation</span></div><button type="button" className="study-text-toggle" onClick={() => setReadOpen((current) => !current)} aria-expanded={readOpen}>{readOpen ? "Hide" : "Read explanation"}</button></div>{readOpen && <div className="study-read-remediation"><p>Use this compact repair path before retrying the question.</p>{result.correctAnswer && <div><span>Correct answer</span><p>{result.correctAnswer}</p></div>}{result.correction && <div><span>What to change</span><p>{result.correction}</p></div>}{result.remediation && <div><span>Try this next</span><p>{result.remediation}</p></div>}</div>}</article><article className="study-video-section"><div className="study-video-section-head"><div><strong>2 · {videoLabel}</strong><span className="study-video-subtitle">Visual explanation with narration</span></div><span>{videoConfig?.configured === false ? "not configured" : videoConfig?.voiceConfigured ? "voice enabled" : "voice optional"}</span></div><p>{videoDescription}</p>{videoState?.status === "loading" && <div className="study-video-loading" role="status"><span className="study-build-spinner" />Preparing source-grounded segments, narration, and playback controls...</div>}{videoState?.status === "ready" && videoState.video ? <RemediationVideoPlayer video={videoState.video} /> : videoState?.status !== "loading" && <button className="study-outline-button" type="button" onClick={onGenerateVideo}>{videoConfig?.mode === "sequenced_clips" ? "Generate rendered video lesson" : "Generate narrated visual lesson"}</button>}{videoState?.status === "error" && <small className="study-video-error">{videoState.error}</small>}</article></div><div className="study-result-actions">{result.retryPrompt && <button className="study-solid-button" type="button" onClick={onSimilarRetry}>Try a similar question</button>}{canContinue && <button className="study-outline-button" type="button" onClick={onContinue}>Review answer and continue</button>}<button className="study-outline-button study-retry-button" type="button" onClick={onRetry}>{result.retryPrompt ? "Retry this question" : "Try this stage again"}</button></div></>}<small>{result.providerMode} / record v{result.recordVersion} / {result.sourceAnchorIds.length} anchors</small></div>;
 }

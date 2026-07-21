@@ -74,7 +74,7 @@ def test_malformed_provider_proposal_falls_back_without_unselected_citations() -
     source_row = source.json()["sources"][0]
 
     class MalformedProvider:
-        mode = "live_fireworks"
+        mode = "live_openai"
 
         def compile_curriculum(self, request):
             return {"concepts": [{"key": "unsupported", "title": "Unsupported claim", "description": "", "sourceIds": ["other-source"], "sourceAnchorIds": ["other-anchor"], "uncertainty": {}}], "prerequisites": [], "activities": [], "uncertainty": {}}

@@ -25,6 +25,20 @@ type Drawer = "sources" | "studio" | null;
 type StudioArtifactType = Exclude<NotebookArtifactType, "openmaic_lesson">;
 type ProviderGenerationRetry = { kind: "artifact"; type: StudioArtifactType } | { kind: "lesson" } | null;
 
+function isRetryableGenerationFailure(message: string) {
+  return /\b(?:provider|openai)\b/i.test(message)
+    && /\b(?:unavailable|invalid|timeout|timed out|rate limit|temporarily)\b/i.test(message);
+}
+
+function artifactProviderLabel(provider?: string | null, model?: string | null) {
+  const normalizedModel = model?.trim().replace(/^cx\//i, "");
+  if (provider === "openai") return `OpenAI${normalizedModel ? ` · ${normalizedModel}` : ""}`;
+  if (provider === "openai") return `OpenAI${normalizedModel ? ` · ${normalizedModel}` : ""}`;
+  if (provider === "openai") return `OpenAI${normalizedModel ? ` · ${normalizedModel}` : ""}`;
+  if (provider === "local_deterministic") return "Local deterministic source structure";
+  return null;
+}
+
 const studioCards: Array<{ type: StudioArtifactType | "notes" | "openmaic_lesson"; label: string; description: string; icon: IconName; accent: string }> = [
   { type: "summary", label: "Study guide", description: "A concise map of every saved topic.", icon: "spark", accent: "#111111" },
   { type: "mcq", label: "Quiz", description: "Recall checks with source-backed answers.", icon: "quiz", accent: "#111111" },
@@ -298,7 +312,7 @@ export default function NotebookWorkspace({ notebookId }: { notebookId: string }
     } catch (caught) {
       const failure = caught instanceof Error ? caught.message : "That studio tool could not be created.";
       setError(failure);
-      if (/fireworks.*(?:unavailable|invalid)|configured fireworks provider/i.test(failure)) setRetryGeneration({ kind: "artifact", type });
+      if (isRetryableGenerationFailure(failure)) setRetryGeneration({ kind: "artifact", type });
     } finally { setBusy(null); }
   }
 
@@ -313,7 +327,7 @@ export default function NotebookWorkspace({ notebookId }: { notebookId: string }
     } catch (caught) {
       const failure = caught instanceof Error ? caught.message : "The narrated lesson could not be created.";
       setError(failure);
-      if (/fireworks.*(?:unavailable|invalid)|configured fireworks provider/i.test(failure)) setRetryGeneration({ kind: "lesson" });
+      if (isRetryableGenerationFailure(failure)) setRetryGeneration({ kind: "lesson" });
     } finally { setBusy(null); }
   }
 
@@ -526,7 +540,7 @@ function EmptyArtifact({ onBack }: { onBack: () => void }) {
 function ArtifactCanvas({ artifact, pack, onBack }: { artifact: NotebookArtifact; pack: Notebook["knowledgePack"]; onBack: () => void }) {
   if (artifact.status !== "ready") return <div className="nlm-empty-output"><span><Icon name="file" size={28} /></span><h2>This output is stale</h2><p>One of its selected sources was removed. Generate it again from the current notebook memory.</p><button type="button" onClick={onBack}>Back to chat</button></div>;
   const payload = artifact.payload;
-  const providerLabel = artifact.provider === "fireworks" ? `Fireworks${artifact.model ? ` · ${artifact.model}` : ""}` : artifact.provider === "local_deterministic" ? "Local deterministic source structure" : null;
+  const providerLabel = artifactProviderLabel(artifact.provider, artifact.model);
   return <div className="nlm-artifact-canvas"><div className="nlm-artifact-top"><div><span className="nlm-kicker">SOURCE-GROUNDED OUTPUT</span><h1>{artifact.title}</h1><p>{artifact.sourceIds.length} selected source{artifact.sourceIds.length === 1 ? "" : "s"} · created {shortDate(artifact.createdAt)}{providerLabel ? ` · ${providerLabel}` : ""}</p></div><button type="button" onClick={onBack}><Icon name="back" size={16} /> Chat</button></div>
     {payload.kind === "summary" && <SummaryArtifact payload={payload} />}
     {payload.kind === "mcq" && <QuizArtifact payload={payload} />}

@@ -9,7 +9,7 @@
     "studyPlanId": { "type": "string", "minLength": 8, "maxLength": 120 },
     "sourceIds": { "type": "array", "minItems": 1, "maxItems": 20, "items": { "type": "string" } },
     "chapterSelection": { "type": "string", "enum": ["chapter_1", "all"] },
-    "providerMode": { "type": "string", "enum": ["codex_fixture", "live_openai", "live_fireworks", "human_review"] },
+    "providerMode": { "type": "string", "enum": ["codex_fixture", "live_openai", "human_review"] },
     "sourcePackVersion": { "type": "string", "minLength": 1, "maxLength": 120 },
     "recordVersion": { "type": "integer", "minimum": 1 },
     "outline": {

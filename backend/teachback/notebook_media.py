@@ -30,11 +30,31 @@ def _active_provider_metadata() -> tuple[str, str]:
     configured = str(getattr(settings, "LLM_PROVIDER", "fixture") or "fixture").casefold()
     if configured in {"openai", "live_openai"}:
         return "openai", normalize_model_name(getattr(settings, "OPENAI_MODEL", "gpt-5.6-terra-high"), "gpt-5.6-terra-high")
-    if configured in {"qwen", "live_qwen"}:
-        return "qwen", str(getattr(settings, "FIREWORKS_MODEL", ""))
-    if configured in {"fireworks", "live_fireworks"}:
-        return "fireworks", str(getattr(settings, "FIREWORKS_MODEL", ""))
     return "local_deterministic", "source-structure-v1"
+
+
+def notebook_provider_metadata() -> tuple[str, str]:
+    """Return the non-secret provider identity configured for notebook output."""
+    return _active_provider_metadata()
+
+
+def notebook_provider_label() -> str:
+    """Give notebook errors a truthful learner-facing provider label."""
+    provider, _ = _active_provider_metadata()
+    if provider == "openai":
+        return "OpenAI gateway" if getattr(settings, "OPENAI_BASE_URL", "") else "OpenAI"
+    return "local teaching"
+
+
+def _result_provider_metadata(provider: object | None) -> tuple[str, str]:
+    """Keep saved provenance aligned with the provider that answered."""
+    if provider is None:
+        return _active_provider_metadata()
+    provider_id = str(getattr(provider, "provider_id", "") or "").casefold()
+    model = str(getattr(provider, "model", "") or "").strip()
+    if provider_id == "openai":
+        return provider_id, normalize_model_name(model, _active_provider_metadata()[1])
+    return _active_provider_metadata()
 
 
 STOP_WORDS = {
@@ -97,7 +117,7 @@ def _retrieve_chunks(sections: list[dict], question: str, *, max_chunks: int = 1
     """Select bounded source chunks for generation while preserving citations.
 
     This is the notebook's deterministic RAG layer.  It deliberately avoids
-    sending an entire OCR dump to Qwen: each candidate is a durable text block,
+    sending an entire OCR dump to OpenAI: each candidate is a durable text block,
     scored against the question and its section title, then grouped back into
     the original section shape so existing anchor validation still applies.
     """
@@ -303,7 +323,7 @@ def _source_excerpt_recovery(
 ) -> dict:
     """Return an explicitly labelled source excerpt after a provider failure.
 
-    The fallback is direct, saved source material—not a replacement generated
+    The fallback is direct, saved source materialâ€”not a replacement generated
     answer.  A typed error category lets the UI distinguish a retryable outage
     from an invalid model response or rejected citation.
     """
@@ -435,7 +455,7 @@ def _anchor_locations(sections: list[dict]) -> dict[str, dict]:
 
 def _artifact_text(value: object, field: str, *, minimum: int = 3, maximum: int = 1400) -> str:
     raw_text = " ".join(str(value or "").split())
-    # Fireworks occasionally returns duplicate-glyph strings (for example
+    # OpenAI occasionally returns duplicate-glyph strings (for example
     # ``RReeccuurrrreennccee``) even though the source pack is clean. Apply the
     # same conservative repair used for PDF text layers before exposing model
     # output in a learner-facing artifact. Ordinary words such as ``book``
@@ -473,7 +493,7 @@ def _artifact_text(value: object, field: str, *, minimum: int = 3, maximum: int 
             joined = f"{match.group(1)}{match.group(2)}"
             return joined.capitalize() if joined.casefold() in split_words else match.group(0)
         text = re.sub(r"\b([A-Z])\s+([a-z]{1,8})\b", join_split, text)
-        # Qwen's duplicated-glyph output has one recurring transposition for
+        # OpenAI's duplicated-glyph output has one recurring transposition for
         # this concept name; correct it only in the high-signal repair path.
         text = re.sub(r"\btranasformer(s?)\b", r"Transformer\1", text, flags=re.IGNORECASE)
     # A low-signal model typo can still duplicate an initial capital (for
@@ -485,24 +505,24 @@ def _artifact_text(value: object, field: str, *, minimum: int = 3, maximum: int 
     text = re.sub(r"\b([A-Za-z])(\1)([a-z]{3,})\b", collapse_initial, text, flags=re.IGNORECASE)
     text = " ".join(text.split())
     if len(text) < minimum:
-        raise ProviderOutputError(f"Fireworks returned an incomplete artifact field: {field}")
+        raise ProviderOutputError(f"OpenAI returned an incomplete artifact field: {field}")
     return text[:maximum]
 
 
 def _artifact_list(value: object, field: str, *, minimum: int = 1, maximum: int = 80) -> list:
     if not isinstance(value, list) or not minimum <= len(value) <= maximum:
-        raise ProviderOutputError(f"Fireworks returned an incomplete artifact field: {field}")
+        raise ProviderOutputError(f"OpenAI returned an incomplete artifact field: {field}")
     return value
 
 
 def _artifact_citations(item: dict, anchor_locations: dict[str, dict]) -> tuple[list[str], list[str], list[int]]:
     raw = item.get("sourceAnchorIds") if isinstance(item, dict) else None
     if not isinstance(raw, list) or not raw:
-        raise ProviderOutputError("Fireworks artifact omitted source citations")
+        raise ProviderOutputError("OpenAI artifact omitted source citations")
     requested = [str(anchor).strip() for anchor in raw if str(anchor).strip()]
     invalid = [anchor for anchor in requested if anchor not in anchor_locations]
     if invalid:
-        raise ProviderOutputError("Fireworks artifact returned an unapproved source citation")
+        raise ProviderOutputError("OpenAI artifact returned an unapproved source citation")
     anchors = list(dict.fromkeys(requested))[:4]
     source_ids: list[str] = []
     pages: list[int] = []
@@ -515,7 +535,7 @@ def _artifact_citations(item: dict, anchor_locations: dict[str, dict]) -> tuple[
         if isinstance(page, int) and page not in pages:
             pages.append(page)
     if not source_ids:
-        raise ProviderOutputError("Fireworks artifact citations could not be bound to a saved source")
+        raise ProviderOutputError("OpenAI artifact citations could not be bound to a saved source")
     return anchors, source_ids, pages
 
 
@@ -538,14 +558,16 @@ def _normalized_provider_artifact(
     pack: dict,
     anchor_locations: dict[str, dict],
     allowed_asset_ids: list[str],
+    provider_metadata: tuple[str, str] | None = None,
 ) -> tuple[str, dict]:
     """Bind a live-provider artifact to server-owned sources and citations."""
     if not isinstance(raw, dict):
         raise ProviderOutputError("The live provider returned an invalid artifact response")
     title = _artifact_text(raw.get("title"), "title", maximum=240)
+    provider_id, provider_model = provider_metadata or _active_provider_metadata()
     provenance = _artifact_provenance(
-        provider=_active_provider_metadata()[0],
-        model=_active_provider_metadata()[1],
+        provider=provider_id,
+        model=provider_model,
         status="completed",
         citation_validation="passed",
     )
@@ -553,7 +575,7 @@ def _normalized_provider_artifact(
         sections = []
         for item in _artifact_list(raw.get("sections"), "sections", maximum=24):
             if not isinstance(item, dict):
-                raise ProviderOutputError("Fireworks returned an invalid summary section")
+                raise ProviderOutputError("OpenAI returned an invalid summary section")
             anchors, source_ids, _ = _artifact_citations(item, anchor_locations)
             sections.append({
                 "title": _artifact_text(item.get("title"), "section title", maximum=240),
@@ -567,16 +589,16 @@ def _normalized_provider_artifact(
         questions = []
         for index, item in enumerate(_artifact_list(raw.get("questions"), "questions", maximum=30), start=1):
             if not isinstance(item, dict):
-                raise ProviderOutputError("Fireworks returned an invalid question")
+                raise ProviderOutputError("OpenAI returned an invalid question")
             anchors, source_ids, _ = _artifact_citations(item, anchor_locations)
             options = [_artifact_text(option, "MCQ option", minimum=1, maximum=320) for option in _artifact_list(item.get("options"), "MCQ options", minimum=3, maximum=4)]
             if len({option.casefold() for option in options}) != len(options):
-                raise ProviderOutputError("Fireworks returned duplicate MCQ options")
+                raise ProviderOutputError("OpenAI returned duplicate MCQ options")
             answer_index = item.get("answerIndex")
             if isinstance(answer_index, bool) or not isinstance(answer_index, int) or not 0 <= answer_index < len(options):
-                raise ProviderOutputError("Fireworks returned an invalid MCQ answer index")
+                raise ProviderOutputError("OpenAI returned an invalid MCQ answer index")
             questions.append({
-                "id": f"fireworks-mcq-{index:03d}",
+                "id": f"OpenAI-mcq-{index:03d}",
                 "topicTitle": _artifact_text(item.get("topicTitle") or "Source topic", "MCQ topic", maximum=240),
                 "question": _artifact_text(item.get("question"), "MCQ question", minimum=12, maximum=520),
                 "options": options,
@@ -584,14 +606,14 @@ def _normalized_provider_artifact(
                 "explanation": _artifact_text(item.get("explanation"), "MCQ explanation", minimum=12),
                 "sourceIds": source_ids,
                 "sourceAnchors": anchors,
-                "quality": "fireworks_source_grounded",
+                "quality": "OpenAI_source_grounded",
                 "questionType": "retrieval_transfer",
             })
         return title, {
             "kind": "mcq",
             "questions": questions,
             "instructions": "Answer first; reveal explanations after submitting.",
-            "quality": "Fireworks-generated questions with server-validated source citations.",
+            "quality": "OpenAI-generated questions with server-validated source citations.",
             "provenance": provenance,
         }
 
@@ -600,13 +622,13 @@ def _normalized_provider_artifact(
         allowed_assets = set(allowed_asset_ids)
         for index, item in enumerate(_artifact_list(raw.get("slides"), "slides", maximum=24), start=1):
             if not isinstance(item, dict):
-                raise ProviderOutputError("Fireworks returned an invalid slide")
+                raise ProviderOutputError("OpenAI returned an invalid slide")
             anchors, source_ids, _ = _artifact_citations(item, anchor_locations)
             bullets = [_artifact_text(value, "slide bullet", minimum=2, maximum=240) for value in _artifact_list(item.get("bullets"), "slide bullets", maximum=5)]
             raw_assets = item.get("assetIds") if isinstance(item.get("assetIds"), list) else []
             asset_ids = [str(asset) for asset in raw_assets if str(asset) in allowed_assets][:3]
             if any(str(asset) not in allowed_assets for asset in raw_assets):
-                raise ProviderOutputError("Fireworks returned an unapproved visual asset")
+                raise ProviderOutputError("OpenAI returned an unapproved visual asset")
             diagram = _safe_diagram(item.get("diagram"))
             visual_kind = str(item.get("visualKind") or "").strip()
             if visual_kind not in {"text-note", "source-figure", "teaching-diagram"}:
@@ -623,7 +645,7 @@ def _normalized_provider_artifact(
                 "assetIds": asset_ids,
                 "diagram": diagram if diagram.get("nodes") else None,
                 "visualKind": visual_kind,
-                "visualHint": "Fireworks source-grounded teaching structure with validated citations.",
+                "visualHint": "OpenAI source-grounded teaching structure with validated citations.",
             })
         return title, {"kind": "slides", "slides": slides, "assets": pack.get("assets") or [], "provenance": provenance}
 
@@ -631,10 +653,10 @@ def _normalized_provider_artifact(
         cards = []
         for index, item in enumerate(_artifact_list(raw.get("cards"), "cards", maximum=80), start=1):
             if not isinstance(item, dict):
-                raise ProviderOutputError("Fireworks returned an invalid flashcard")
+                raise ProviderOutputError("OpenAI returned an invalid flashcard")
             anchors, source_ids, _ = _artifact_citations(item, anchor_locations)
             cards.append({
-                "id": f"fireworks-card-{index:03d}",
+                "id": f"OpenAI-card-{index:03d}",
                 "front": _artifact_text(item.get("front"), "flashcard prompt", minimum=4, maximum=500),
                 "back": _artifact_text(item.get("back"), "flashcard answer", minimum=12),
                 "tag": _artifact_text(item.get("tag") or "RECALL", "flashcard tag", maximum=80),
@@ -652,13 +674,13 @@ def _normalized_provider_artifact(
         questions = []
         for index, item in enumerate(_artifact_list(raw.get("questions"), "questions", maximum=60), start=1):
             if not isinstance(item, dict):
-                raise ProviderOutputError("Fireworks returned an invalid important question")
+                raise ProviderOutputError("OpenAI returned an invalid important question")
             anchors, source_ids, _ = _artifact_citations(item, anchor_locations)
             kind = str(item.get("kind") or "").casefold()
             if kind not in {"explain", "apply"}:
-                raise ProviderOutputError("Fireworks returned an invalid question kind")
+                raise ProviderOutputError("OpenAI returned an invalid question kind")
             questions.append({
-                "id": f"fireworks-question-{index:03d}",
+                "id": f"OpenAI-question-{index:03d}",
                 "kind": kind,
                 "question": _artifact_text(item.get("question"), "important question", minimum=12, maximum=600),
                 "answerFocus": _artifact_text(item.get("answerFocus"), "important question focus", minimum=12),
@@ -673,11 +695,11 @@ def _normalized_provider_artifact(
         id_map: dict[str, str] = {}
         for index, item in enumerate(raw_nodes, start=1):
             if not isinstance(item, dict):
-                raise ProviderOutputError("Fireworks returned an invalid mind-map node")
+                raise ProviderOutputError("OpenAI returned an invalid mind-map node")
             raw_id = _artifact_text(item.get("id"), "mind-map node ID", maximum=80)
             if raw_id in id_map:
-                raise ProviderOutputError("Fireworks returned duplicate mind-map node IDs")
-            node_id = f"fireworks-node-{index:02d}"
+                raise ProviderOutputError("OpenAI returned duplicate mind-map node IDs")
+            node_id = f"OpenAI-node-{index:02d}"
             id_map[raw_id] = node_id
             anchors, source_ids, _ = _artifact_citations(item, anchor_locations)
             nodes.append({
@@ -692,27 +714,27 @@ def _normalized_provider_artifact(
         seen_edges: set[tuple[str, str]] = set()
         for edge in raw.get("edges") if isinstance(raw.get("edges"), list) else []:
             if not isinstance(edge, dict):
-                raise ProviderOutputError("Fireworks returned an invalid mind-map edge")
+                raise ProviderOutputError("OpenAI returned an invalid mind-map edge")
             source = id_map.get(str(edge.get("from") or ""))
             target = id_map.get(str(edge.get("to") or ""))
             if not source or not target or source == target or (source, target) in seen_edges:
-                raise ProviderOutputError("Fireworks returned an invalid mind-map relationship")
+                raise ProviderOutputError("OpenAI returned an invalid mind-map relationship")
             seen_edges.add((source, target))
             edges.append({"from": source, "to": target})
         if not edges:
             edges = [{"from": "notebook-root", "to": node["id"]} for node in nodes[1:]]
-        return title, {"kind": "mind_map", "nodes": nodes, "edges": edges, "note": "Fireworks-generated concept structure with server-validated source citations.", "provenance": provenance}
+        return title, {"kind": "mind_map", "nodes": nodes, "edges": edges, "note": "OpenAI-generated concept structure with server-validated source citations.", "provenance": provenance}
 
     if artifact_type == "data_table":
         source_text = _source_context(_artifact_sections(pack), pack.get("sourceCatalog")).casefold()
         rows = []
         for item in _artifact_list(raw.get("rows"), "data-table rows", maximum=60):
             if not isinstance(item, dict):
-                raise ProviderOutputError("Fireworks returned an invalid data-table row")
+                raise ProviderOutputError("OpenAI returned an invalid data-table row")
             anchors, source_ids, pages = _artifact_citations(item, anchor_locations)
             formulas = [_artifact_text(value, "data-table formula", minimum=1, maximum=400) for value in (item.get("formulas") or []) if str(value).strip()][:4]
             if any(formula.casefold() not in source_text for formula in formulas):
-                raise ProviderOutputError("Fireworks returned a data-table formula that is not present in the selected sources")
+                raise ProviderOutputError("OpenAI returned a data-table formula that is not present in the selected sources")
             rows.append({
                 "topic": _artifact_text(item.get("topic"), "data-table topic", maximum=240),
                 "pages": pages,
@@ -721,14 +743,14 @@ def _normalized_provider_artifact(
                 "sourceIds": source_ids,
                 "sourceAnchors": anchors,
             })
-        return title, {"kind": "data_table", "columns": ["Topic", "Pages", "Key idea", "Formulas"], "rows": rows, "note": "Fireworks-organized study table with server-validated source citations.", "provenance": provenance}
+        return title, {"kind": "data_table", "columns": ["Topic", "Pages", "Key idea", "Formulas"], "rows": rows, "note": "OpenAI-organized study table with server-validated source citations.", "provenance": provenance}
 
     if artifact_type == "formula_sheet":
         source_text = _source_context(_artifact_sections(pack), pack.get("sourceCatalog")).casefold()
         formulas = []
         for index, item in enumerate(_artifact_list(raw.get("formulas"), "formulas", minimum=0, maximum=60), start=1):
             if not isinstance(item, dict):
-                raise ProviderOutputError("Fireworks returned an invalid formula entry")
+                raise ProviderOutputError("OpenAI returned an invalid formula entry")
             formula = _artifact_text(item.get("text"), "formula", maximum=600)
             if formula.casefold() not in source_text:
                 # Formula sheets are a literal source index. Discard a model
@@ -737,7 +759,7 @@ def _normalized_provider_artifact(
                 continue
             anchors, source_ids, pages = _artifact_citations(item, anchor_locations)
             formulas.append({
-                "formulaId": f"fireworks-formula-{index:03d}",
+                "formulaId": f"OpenAI-formula-{index:03d}",
                 "text": formula,
                 "label": _artifact_text(item.get("label") or "Source formula", "formula label", maximum=240),
                 "sourceId": source_ids[0],
@@ -745,7 +767,7 @@ def _normalized_provider_artifact(
                 "sourceAnchors": anchors,
             })
         note = (
-            "Fireworks-curated formulas copied from cited selected-source passages."
+            "OpenAI-curated formulas copied from cited selected-source passages."
             if formulas
             else "No literal equations were found in the selected sources. Add a source containing equations to build a formula sheet."
         )
@@ -755,7 +777,7 @@ def _normalized_provider_artifact(
 
 
 def generate_notebook_artifact(pack: dict, artifact_type: str) -> tuple[str, dict]:
-    """Build a notebook artifact through Fireworks only when explicitly live.
+    """Build a notebook artifact through OpenAI only when explicitly live.
 
     The deterministic builder is intentionally retained for fixture and
     unconfigured local environments. It is tagged as local source structure so
@@ -792,7 +814,8 @@ def generate_notebook_artifact(pack: dict, artifact_type: str) -> tuple[str, dic
         and str(formula.get("sectionId") or "") in selected_section_ids
         and str(formula.get("text") or "").strip()
     ][:60]
-    raw = provider_for().generate_notebook_artifact({
+    provider = provider_for()
+    raw = provider.generate_notebook_artifact({
         "artifactType": artifact_type,
         "sourceIds": selected_source_ids,
         "sourceContext": _source_context(sections, pack.get("sourceCatalog")),
@@ -806,6 +829,7 @@ def generate_notebook_artifact(pack: dict, artifact_type: str) -> tuple[str, dic
         pack=pack,
         anchor_locations=anchor_locations,
         allowed_asset_ids=allowed_asset_ids,
+        provider_metadata=_result_provider_metadata(provider),
     )
 
 
@@ -831,7 +855,7 @@ def _local_lesson_manifest(sections: list[dict], question: str, anchor_ids: list
         (f"Visual model: {source_title}", f"Use the visual model to connect the parts of {source_title}. {source_body}", "Follow the highlighted flow from the input or cause to the output or result."),
         (f"Apply and transfer {source_title}", f"Apply the same reasoning to a new situation. The key repair is to return to the source explanation: {source_body}", "Explain why the same principle still applies when the example changes."),
     ]
-    return {"title": f"{source_title} · guided lesson", "slides": [{
+    return {"title": f"{source_title} Â· guided lesson", "slides": [{
         "slideId": f"local-scene-{index + 1}", "title": title[:160], "slideLabel": "KEY IDEA" if index == 0 else "SOURCE NOTE", "body": body[:1100], "bullets": bullets[:4],
         "teachingNote": narration[:220], "visualKind": "teaching-diagram" if index == 2 else "text-note",
         "narration": narration + " " + " ".join(bullets[:2]), "sourceAnchorIds": anchor_ids[:4], "assetIds": asset_ids[:2],
@@ -851,13 +875,15 @@ def generate_openmaic_lesson(pack: dict, question: str, *, allow_web_search: boo
     allowed_anchors = _anchors_for_sections(sections)
     allowed_asset_ids, asset_catalog = _assets_for_sections(pack, sections)
     live_provider = active_generation_configured()
+    provider = None
     if live_provider:
-        manifest = provider_for().generate_openmaic_lesson({
+        provider = provider_for()
+        manifest = provider.generate_openmaic_lesson({
             "question": question,
             "sourceContext": source_context,
             # Notebook lessons are strictly selected-source scoped. The caller
             # can offer web research elsewhere, but it must never be silently
-            # blended into a Fireworks lesson artifact.
+            # blended into a OpenAI lesson artifact.
             "webContext": "",
             "allowedAnchorIds": allowed_anchors,
             "allowedAssetIds": allowed_asset_ids,
@@ -867,7 +893,7 @@ def generate_openmaic_lesson(pack: dict, question: str, *, allow_web_search: boo
     raw_slides = manifest.get("slides") if isinstance(manifest, dict) else None
     if not isinstance(raw_slides, list) or not 4 <= len(raw_slides) <= 8:
         if live_provider:
-            raise ProviderOutputError("Fireworks returned an incomplete narrated lesson")
+            raise ProviderOutputError("OpenAI returned an incomplete narrated lesson")
         manifest = _local_lesson_manifest(sections, question, allowed_anchors, allowed_asset_ids, web["context"])
         raw_slides = manifest["slides"]
     topic_anchors = allowed_anchors[:8]
@@ -876,18 +902,18 @@ def generate_openmaic_lesson(pack: dict, question: str, *, allow_web_search: boo
     for index, raw in enumerate(raw_slides[:8]):
         if not isinstance(raw, dict):
             if live_provider:
-                raise ProviderOutputError("Fireworks returned an invalid narrated-lesson slide")
+                raise ProviderOutputError("OpenAI returned an invalid narrated-lesson slide")
             continue
         raw_anchors = raw.get("sourceAnchorIds") if isinstance(raw.get("sourceAnchorIds"), list) else []
         invalid_anchors = [str(item) for item in raw_anchors if str(item) not in set(allowed_anchors)]
         source_anchor_ids = [str(item) for item in raw_anchors if str(item) in set(allowed_anchors)]
         if live_provider and (invalid_anchors or not source_anchor_ids):
-            raise ProviderOutputError("Fireworks returned an unapproved or missing lesson citation")
+            raise ProviderOutputError("OpenAI returned an unapproved or missing lesson citation")
         source_anchor_ids = list(dict.fromkeys(source_anchor_ids)) or topic_anchors
         raw_assets = raw.get("assetIds") if isinstance(raw.get("assetIds"), list) else []
         invalid_assets = [str(item) for item in raw_assets if str(item) not in set(allowed_asset_ids)]
         if live_provider and invalid_assets:
-            raise ProviderOutputError("Fireworks returned an unapproved lesson visual asset")
+            raise ProviderOutputError("OpenAI returned an unapproved lesson visual asset")
         asset_ids = [str(item) for item in raw_assets if str(item) in set(allowed_asset_ids)]
         if live_provider:
             title = _artifact_text(raw.get("title"), "lesson slide title", maximum=180)
@@ -898,11 +924,11 @@ def generate_openmaic_lesson(pack: dict, question: str, *, allow_web_search: boo
             actions = []
             for action in raw_actions:
                 if not isinstance(action, dict):
-                    raise ProviderOutputError("Fireworks returned an invalid lesson action")
+                    raise ProviderOutputError("OpenAI returned an invalid lesson action")
                 kind = str(action.get("kind") or "").strip()
                 label = _artifact_text(action.get("label"), "lesson action label", minimum=2, maximum=180)
                 if kind not in {"reveal", "highlight", "draw", "write", "pause"}:
-                    raise ProviderOutputError("Fireworks returned an invalid lesson action kind")
+                    raise ProviderOutputError("OpenAI returned an invalid lesson action kind")
                 actions.append({"kind": kind, "label": label, "target": str(action.get("target") or "body"), "targetIndex": action.get("targetIndex")})
         else:
             title = " ".join(str(raw.get("title") or f"Teaching scene {index + 1}").split())[:180]
@@ -953,7 +979,7 @@ def generate_openmaic_lesson(pack: dict, question: str, *, allow_web_search: boo
         slides.append(slide)
     if len(slides) < 4:
         raise ProviderOutputError("OpenMAIC lesson returned too few usable scenes")
-    provider_id, provider_model = _active_provider_metadata() if live_provider else ("local_deterministic", "source-structure-v1")
+    provider_id, provider_model = _result_provider_metadata(provider) if live_provider else ("local_deterministic", "source-structure-v1")
     provider_status = "completed" if live_provider else "local_fallback_active"
     return {
         "kind": "openmaic_lesson",

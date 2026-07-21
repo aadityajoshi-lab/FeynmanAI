@@ -57,10 +57,6 @@ def _active_provider_metadata() -> tuple[str, str]:
     configured = str(getattr(settings, "LLM_PROVIDER", "fixture") or "fixture").casefold()
     if configured in {"openai", "live_openai"}:
         return "openai", normalize_model_name(getattr(settings, "OPENAI_MODEL", "gpt-5.6-terra-high"), "gpt-5.6-terra-high")
-    if configured in {"qwen", "live_qwen"}:
-        return "qwen", str(getattr(settings, "FIREWORKS_MODEL", ""))
-    if configured in {"fireworks", "live_fireworks"}:
-        return "fireworks", str(getattr(settings, "FIREWORKS_MODEL", ""))
     return "local", "deterministic-evidence-v1"
 
 
@@ -547,9 +543,9 @@ def _activity_provider_feedback(
         **base,
         "state": evaluation["state"],
         "providerAttempt": "completed",
-        "providerMode": str(result.get("providerMode") or "live_qwen"),
-        "provider": "fireworks" if result.get("providerMode") == "live_fireworks_fallback" else base["provider"],
-        "model": str(getattr(settings, "FIREWORKS_MODEL", "")) if result.get("providerMode") == "live_fireworks_fallback" else base["model"],
+        "providerMode": str(result.get("providerMode") or "live_openai"),
+        "provider": base["provider"],
+        "model": base["model"],
         "retryAvailable": evaluation["nextAction"] == "retry",
         "uncertainty": "Provider requested human review." if evaluation["state"] != "complete" else ("The response may be overconfident." if evaluation["overconfidence"] else ""),
         "evaluation": evaluation,
@@ -1147,9 +1143,6 @@ class GoalContractPreviewView(LearningOsAPIView):
             })
             contract = _apply_generated_contract(base, generated, domain=domain)
             provider_mode = str(generated.get("providerMode") or "")
-            if provider_mode == "live_fireworks_fallback":
-                provider_name = "fireworks"
-                provider_model = str(getattr(settings, "FIREWORKS_MODEL", ""))
             return Response({"contract": contract, "domain": domain, "provider": provider_name, "model": provider_model, "providerMode": provider_mode or None, "generated": True})
         except (ProviderUnavailable, ProviderOutputError):
             # The contract remains editable and honest if the model is down;
@@ -1653,6 +1646,15 @@ class GoalActivityAttemptView(LearningOsAPIView):
         # incomplete provider output can only lower certainty, never verify.
         if evaluation is not None and evaluation.get("state") != "complete":
             decision["evidenceStatus"] = "needs_review"
+        # A source-grounded evaluator is not allowed to promote a learner, but
+        # an explicit incorrect judgement is a safety signal that must block a
+        # deterministic length/anchor score from advancing the route.  This is
+        # deliberately one-way: the provider can require another attempt, not
+        # grant mastery on its own.
+        if evaluation is not None and evaluation.get("state") == "complete" and evaluation.get("correct") is False:
+            decision["action"] = "retry"
+            decision["reason"] = "provider_identified_misconception"
+            decision["evidenceStatus"] = "needs_review"
         evidence_status = str(decision["evidenceStatus"])
         # Backwards-compatible local source verification remains explicit and
         # deterministic: selected ready sources + validated anchors + a
@@ -1662,6 +1664,7 @@ class GoalActivityAttemptView(LearningOsAPIView):
             and anchor_ids
             and word_count >= 30
             and decision["score"] >= 0.65
+            and decision["action"] in {"advance", "increase_difficulty"}
             and provider_attempt != "failed"
             and (evaluation is None or evaluation.get("state") == "complete")
         ):

@@ -58,9 +58,9 @@ text/visual correction and an optional guided video. Feynman calls
 `POST /api/v1/study-plans/remediation-video`; Django validates the stage anchors
 and then selects one of two modes:
 
-- `fireworks-slides` (default): Fireworks Qwen returns a typed 4-8 slide
+- `openai-slides` (default): OpenAI returns a typed 4-8 slide
   storyboard. Feynman presents it with optional VoxCPM narration or browser
-  speech fallback. This uses the existing Fireworks key only and is the normal
+  speech fallback. This uses the existing OpenAI key only and is the normal
   local setup.
 - rendered clips: the protected local Next route follows OpenMAIC's provider
   pipeline with short 5/10-second tasks, two-at-a-time generation, polling,
@@ -73,8 +73,8 @@ retry, similar-question, and continue controls available if media fails.
 ## Settings
 
 ```text
-# backend/.env -- default Fireworks-only remediation
-REMEDIATION_VIDEO_PROVIDER=fireworks-slides
+# backend/.env -- default OpenAI-only remediation
+REMEDIATION_VIDEO_PROVIDER=openai-slides
 TTS_VOXCPM_BASE_URL=http://127.0.0.1:8001
 
 # backend/.env -- optional protected bridge for rendered clips
@@ -89,7 +89,7 @@ VIDEO_SEEDANCE_MODEL=doubao-seedance-2-0-260128
 FEYNMAN_VIDEO_INTERNAL_KEY=feynman-local-video
 ```
 
-The backend Fireworks key is used for Qwen authoring, evaluation, and the
+The backend OpenAI key is used for OpenAI authoring, evaluation, and the
 default slide lesson. It is never exposed to the browser and is not treated as
 a Seedance key.
 

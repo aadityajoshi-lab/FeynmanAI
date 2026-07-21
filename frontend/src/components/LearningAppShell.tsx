@@ -42,7 +42,7 @@ function NavLink({ item, pathname }: { item: NavItem; pathname: string }) {
   return <Link href={item.href as never} className={`fos-nav-link ${active ? "active" : ""}`} aria-current={active ? "page" : undefined}><FeynmanIcon name={item.icon} /><span>{item.label}</span></Link>;
 }
 
-export function LearningAppShell({ children, title, eyebrow, actions, mobileActions, compact = false }: { children: ReactNode; title?: string; eyebrow?: string; actions?: ReactNode; mobileActions?: ReactNode; compact?: boolean }) {
+export function LearningAppShell({ children, title, eyebrow, actions, mobileActions, compact = false, wide = false }: { children: ReactNode; title?: string; eyebrow?: string; actions?: ReactNode; mobileActions?: ReactNode; compact?: boolean; wide?: boolean }) {
   const pathname = usePathname();
   const [signingOut, setSigningOut] = useState(false);
   const [isSignedIn, setIsSignedIn] = useState<boolean | null>(null);
@@ -83,7 +83,7 @@ export function LearningAppShell({ children, title, eyebrow, actions, mobileActi
         <div className="fos-breadcrumb"><span>{eyebrow || "LEARNING OS"}</span>{title ? <><i>/</i><strong>{title}</strong></> : null}</div>
         <div className="fos-top-actions">{actions}<Link href="/goals/new" className="fos-primary-action fos-top-goal-action"><FeynmanIcon name="plus" size={15} /> New goal</Link>{isSignedIn === true ? <><Link href="/settings/privacy" className="fos-avatar" aria-label="Open account settings">A</Link><button type="button" className="fos-signout-action" onClick={() => void signOut()} disabled={signingOut} aria-label="Sign out">{signingOut ? "Signing out…" : "Sign out"}</button></> : isSignedIn === false ? <Link href={"/login" as never} className="fos-signin-action">Sign in</Link> : null}</div>
       </header>
-      <main id="feynman-main" className="fos-main">{children}</main>
+      <main id="feynman-main" className={`fos-main ${wide ? "fos-main-wide" : ""}`}>{children}</main>
     </div>
     <nav className="fos-mobile-nav" aria-label="Mobile navigation">
       {mobilePrimaryNav.map((item) => <NavLink item={item} pathname={pathname} key={item.label} />)}

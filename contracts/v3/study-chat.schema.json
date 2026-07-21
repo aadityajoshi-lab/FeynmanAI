@@ -21,7 +21,7 @@
         "reason": { "type": "string" }
       }
     },
-    "providerMode": { "type": "string", "enum": ["codex_fixture", "live_openai", "live_fireworks", "human_review"] },
+    "providerMode": { "type": "string", "enum": ["codex_fixture", "live_openai", "human_review"] },
     "sourcePackVersion": { "type": "string" },
     "recordVersion": { "type": "integer", "minimum": 1 },
     "reviewRequired": { "type": "boolean" }

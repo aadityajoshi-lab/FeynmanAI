@@ -234,7 +234,7 @@ def test_notebook_chat_history_persists_provider_and_citation_provenance(client:
             "sourceIds": [source["sourceId"]],
             "sourceAnchorIds": [source["anchorIds"][0]],
             "groundedIn": "notebook",
-            "provider": "fireworks",
+            "provider": "openai",
             "model": "test-model",
             "providerStatus": "completed",
             "citationValidation": "passed",
@@ -243,7 +243,7 @@ def test_notebook_chat_history_persists_provider_and_citation_provenance(client:
         response = client.post(f"/api/v1/notebooks/{notebook_id}/ask", {"question": "What is a signal?"}, format="json")
     assert response.status_code == 200
     message = client.get(f"/api/v1/notebooks/{notebook_id}/chat").json()["messages"][-1]
-    assert message["provider"] == "fireworks"
+    assert message["provider"] == "openai"
     assert message["model"] == "test-model"
     assert message["sourceAnchorIds"] == [source["anchorIds"][0]]
 
@@ -541,7 +541,7 @@ def test_openmaic_lesson_route_persists_a_narrated_lesson(client: APIClient) -> 
     assert response.json()["payload"]["mode"] == "openmaic_native"
 
 
-def test_live_fireworks_normalizes_every_notebook_artifact_with_saved_citations() -> None:
+def test_live_openai_normalizes_every_notebook_artifact_with_saved_citations() -> None:
     """All live artifact families must be model-generated and anchor-bound."""
     pack = {
         "title": "Signals",
@@ -575,7 +575,7 @@ def test_live_fireworks_normalizes_every_notebook_artifact_with_saved_citations(
         "data_table": {"title": "Signal table", "rows": [{"topic": "Signal", "keyIdea": "A signal carries information through a system.", "formulas": ["y = x"], "sourceAnchorIds": [anchor]}]},
     }
 
-    class FakeFireworks:
+    class FakeOpenAI:
         def __init__(self) -> None:
             self.requests: list[dict] = []
 
@@ -583,15 +583,15 @@ def test_live_fireworks_normalizes_every_notebook_artifact_with_saved_citations(
             self.requests.append(request)
             return responses[request["artifactType"]]
 
-    provider = FakeFireworks()
-    with override_settings(LLM_PROVIDER="fireworks", FIREWORKS_API_KEY="test-only-key", FIREWORKS_MODEL="test-fireworks-model"):
+    provider = FakeOpenAI()
+    with override_settings(LLM_PROVIDER="openai", OPENAI_API_KEY="test-only-key", OPENAI_MODEL="test-openai-model"):
         with patch("teachback.notebook_media.provider_for", return_value=provider):
             for artifact_type, response in responses.items():
                 title, payload = generate_notebook_artifact(pack, artifact_type)
                 assert title == response["title"]
                 assert payload["provenance"] == {
-                    "provider": "fireworks",
-                    "model": "test-fireworks-model",
+                    "provider": "openai",
+                    "model": "test-openai-model",
                     "status": "completed",
                     "citationValidation": "passed",
                 }
@@ -629,7 +629,7 @@ def test_live_formula_sheet_keeps_an_honest_empty_state_for_non_math_source() ->
     }
     captured: dict = {}
 
-    class FakeFireworks:
+    class FakeOpenAI:
         def generate_notebook_artifact(self, request: dict) -> dict:
             captured.update(request)
             return {
@@ -641,8 +641,8 @@ def test_live_formula_sheet_keeps_an_honest_empty_state_for_non_math_source() ->
                 }],
             }
 
-    with override_settings(LLM_PROVIDER="fireworks", FIREWORKS_API_KEY="test-only-key", FIREWORKS_MODEL="test-fireworks-model"):
-        with patch("teachback.notebook_media.provider_for", return_value=FakeFireworks()):
+    with override_settings(LLM_PROVIDER="openai", OPENAI_API_KEY="test-only-key", OPENAI_MODEL="test-openai-model"):
+        with patch("teachback.notebook_media.provider_for", return_value=FakeOpenAI()):
             title, payload = generate_notebook_artifact(pack, "formula_sheet")
 
     assert title == "Scheduler formulas"
@@ -653,14 +653,14 @@ def test_live_formula_sheet_keeps_an_honest_empty_state_for_non_math_source() ->
 
 
 @pytest.mark.django_db
-def test_live_fireworks_artifact_endpoint_is_scoped_and_persists_provenance(client: APIClient) -> None:
+def test_live_openai_artifact_endpoint_is_scoped_and_persists_provenance(client: APIClient) -> None:
     registration = client.post(
         "/api/v1/auth/register",
-        {"email": "fireworks-artifact@example.com", "password": "safe-password-123", "displayName": "Fireworks artifact learner"},
+        {"email": "openai-artifact@example.com", "password": "safe-password-123", "displayName": "OpenAI artifact learner"},
         format="json",
     )
     assert registration.status_code == 201
-    created = client.post("/api/v1/notebooks", {"title": "Scoped Fireworks artifacts", "ocrProvider": "local"}, format="json")
+    created = client.post("/api/v1/notebooks", {"title": "Scoped OpenAI artifacts", "ocrProvider": "local"}, format="json")
     notebook_id = created.json()["notebookId"]
     first = client.post(
         f"/api/v1/notebooks/{notebook_id}/sources/text",
@@ -679,13 +679,13 @@ def test_live_fireworks_artifact_endpoint_is_scoped_and_persists_provenance(clie
     anchor = first_source["anchorIds"][0]
     captured: dict = {}
 
-    class FakeFireworks:
+    class FakeOpenAI:
         def generate_notebook_artifact(self, request: dict) -> dict:
             captured.update(request)
             return {"title": "Selected signal guide", "sections": [{"title": "Selected signal", "summary": "The selected source says a signal carries information through a system.", "sourceAnchorIds": [anchor]}]}
 
-    with override_settings(LLM_PROVIDER="fireworks", FIREWORKS_API_KEY="test-only-key", FIREWORKS_MODEL="test-fireworks-model"):
-        with patch("teachback.notebook_media.provider_for", return_value=FakeFireworks()):
+    with override_settings(LLM_PROVIDER="openai", OPENAI_API_KEY="test-only-key", OPENAI_MODEL="test-openai-model"):
+        with patch("teachback.notebook_media.provider_for", return_value=FakeOpenAI()):
             artifact = client.post(
                 f"/api/v1/notebooks/{notebook_id}/artifacts",
                 {"type": "summary", "sourceIds": [first_source["sourceId"]]},
@@ -694,8 +694,8 @@ def test_live_fireworks_artifact_endpoint_is_scoped_and_persists_provenance(clie
     assert artifact.status_code == 201, artifact.content
     body = artifact.json()
     assert body["sourceIds"] == [first_source["sourceId"]]
-    assert body["provider"] == "fireworks"
-    assert body["model"] == "test-fireworks-model"
+    assert body["provider"] == "openai"
+    assert body["model"] == "test-openai-model"
     assert body["citationValidation"] == "passed"
     assert body["payload"]["sections"][0]["sourceAnchors"] == [anchor]
     assert first_source["sourceId"] in captured["sourceContext"]
@@ -704,14 +704,14 @@ def test_live_fireworks_artifact_endpoint_is_scoped_and_persists_provenance(clie
 
 
 @pytest.mark.django_db
-def test_configured_fireworks_lesson_is_source_scoped_and_persists_provenance(client: APIClient) -> None:
+def test_configured_openai_lesson_is_source_scoped_and_persists_provenance(client: APIClient) -> None:
     registration = client.post(
         "/api/v1/auth/register",
-        {"email": "fireworks-live-lesson@example.com", "password": "safe-password-123", "displayName": "Fireworks live lesson learner"},
+        {"email": "openai-live-lesson@example.com", "password": "safe-password-123", "displayName": "OpenAI live lesson learner"},
         format="json",
     )
     assert registration.status_code == 201
-    created = client.post("/api/v1/notebooks", {"title": "Fireworks lesson", "ocrProvider": "local"}, format="json")
+    created = client.post("/api/v1/notebooks", {"title": "OpenAI lesson", "ocrProvider": "local"}, format="json")
     notebook_id = created.json()["notebookId"]
     source = client.post(
         f"/api/v1/notebooks/{notebook_id}/sources/text",
@@ -723,7 +723,7 @@ def test_configured_fireworks_lesson_is_source_scoped_and_persists_provenance(cl
     anchor = source_payload["anchorIds"][0]
     captured: dict = {}
 
-    class FakeFireworks:
+    class FakeOpenAI:
         def generate_openmaic_lesson(self, request: dict) -> dict:
             captured.update(request)
             return {
@@ -744,8 +744,8 @@ def test_configured_fireworks_lesson_is_source_scoped_and_persists_provenance(cl
                 } for index in range(1, 5)],
             }
 
-    with override_settings(LLM_PROVIDER="fireworks", FIREWORKS_API_KEY="test-only-key", FIREWORKS_MODEL="test-fireworks-model"):
-        with patch("teachback.notebook_media.provider_for", return_value=FakeFireworks()):
+    with override_settings(LLM_PROVIDER="openai", OPENAI_API_KEY="test-only-key", OPENAI_MODEL="test-openai-model"):
+        with patch("teachback.notebook_media.provider_for", return_value=FakeOpenAI()):
             lesson = client.post(
                 f"/api/v1/notebooks/{notebook_id}/lessons",
                 {"question": "Explain the selected signal", "requestedDurationSeconds": 120, "sourceIds": [source_payload["sourceId"]]},
@@ -753,8 +753,8 @@ def test_configured_fireworks_lesson_is_source_scoped_and_persists_provenance(cl
             )
     assert lesson.status_code == 201, lesson.content
     payload = lesson.json()["payload"]
-    assert payload["providerId"] == "fireworks"
-    assert payload["providerModel"] == "test-fireworks-model"
+    assert payload["providerId"] == "openai"
+    assert payload["providerModel"] == "test-openai-model"
     assert payload["provenance"]["citationValidation"] == "passed"
     assert all(slide["sourceAnchorIds"] == [anchor] for slide in payload["slides"])
     assert source_payload["sourceId"] in captured["sourceContext"]
@@ -762,14 +762,14 @@ def test_configured_fireworks_lesson_is_source_scoped_and_persists_provenance(cl
 
 
 @pytest.mark.django_db
-def test_configured_fireworks_lesson_failure_never_saves_or_labels_a_local_fallback(client: APIClient) -> None:
+def test_configured_openai_lesson_failure_never_saves_or_labels_a_local_fallback(client: APIClient) -> None:
     registration = client.post(
         "/api/v1/auth/register",
-        {"email": "fireworks-lesson@example.com", "password": "safe-password-123", "displayName": "Fireworks lesson learner"},
+        {"email": "openai-lesson@example.com", "password": "safe-password-123", "displayName": "OpenAI lesson learner"},
         format="json",
     )
     assert registration.status_code == 201
-    created = client.post("/api/v1/notebooks", {"title": "Fireworks lesson failure", "ocrProvider": "local"}, format="json")
+    created = client.post("/api/v1/notebooks", {"title": "OpenAI lesson failure", "ocrProvider": "local"}, format="json")
     notebook_id = created.json()["notebookId"]
     source = client.post(
         f"/api/v1/notebooks/{notebook_id}/sources/text",
@@ -778,12 +778,12 @@ def test_configured_fireworks_lesson_failure_never_saves_or_labels_a_local_fallb
     )
     assert source.status_code == 201
 
-    class UnavailableFireworks:
+    class UnavailableOpenAI:
         def generate_openmaic_lesson(self, request: dict) -> dict:
             raise ProviderUnavailable("timeout")
 
-    with override_settings(LLM_PROVIDER="fireworks", FIREWORKS_API_KEY="test-only-key"):
-        with patch("teachback.notebook_media.provider_for", return_value=UnavailableFireworks()):
+    with override_settings(LLM_PROVIDER="openai", OPENAI_API_KEY="test-only-key"):
+        with patch("teachback.notebook_media.provider_for", return_value=UnavailableOpenAI()):
             lesson = client.post(
                 f"/api/v1/notebooks/{notebook_id}/lessons",
                 {"question": "Explain the signal source", "requestedDurationSeconds": 120},
@@ -794,6 +794,73 @@ def test_configured_fireworks_lesson_failure_never_saves_or_labels_a_local_fallb
     assert failure["error"]["code"] == "provider_unavailable"
     assert failure["retryAvailable"] is True
     assert failure["retryAction"] == "generate_lesson"
+    assert client.get(f"/api/v1/notebooks/{notebook_id}/artifacts").json()["artifacts"] == []
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("endpoint", "body", "generator", "retry_action"),
+    [
+        ("artifacts", {"type": "summary"}, "generate_notebook_artifact", "generate_artifact"),
+        ("lessons", {"question": "Explain the selected source", "requestedDurationSeconds": 120}, "generate_openmaic_lesson", "generate_lesson"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("failure", "status_code", "error_code", "category"),
+    [
+        (ProviderUnavailable("timeout"), 503, "provider_unavailable", "timeout"),
+        (ProviderOutputError("malformed structured output"), 502, "artifact_generation_failed", "model_response_invalid"),
+    ],
+)
+def test_openai_notebook_failures_are_never_mislabelled_as_openai(
+    client: APIClient,
+    endpoint: str,
+    body: dict,
+    generator: str,
+    retry_action: str,
+    failure: Exception,
+    status_code: int,
+    error_code: str,
+    category: str,
+) -> None:
+    if endpoint == "lessons" and error_code == "artifact_generation_failed":
+        error_code = "lesson_generation_failed"
+    registration = client.post(
+        "/api/v1/auth/register",
+        {"email": f"openai-{endpoint}-{status_code}@example.com", "password": "safe-password-123", "displayName": "OpenAI learner"},
+        format="json",
+    )
+    assert registration.status_code == 201
+    created = client.post("/api/v1/notebooks", {"title": "OpenAI provider failure", "ocrProvider": "local"}, format="json")
+    notebook_id = created.json()["notebookId"]
+    source = client.post(
+        f"/api/v1/notebooks/{notebook_id}/sources/text",
+        {"title": "Source", "text": "A signal carries information through a system and learners should explain the relationship."},
+        format="json",
+    )
+    assert source.status_code == 201
+
+    with override_settings(
+        LLM_PROVIDER="openai",
+        OPENAI_API_KEY="openai-test-key",
+        OPENAI_BASE_URL="http://openai.test/v1",
+        OPENAI_MODEL="cx/gpt-5.6-terra-high",
+    ):
+        with patch(f"teachback.notebook_views.{generator}", side_effect=failure):
+            with patch("teachback.notebook_views.record_provider_failure") as recorder:
+                response = client.post(f"/api/v1/notebooks/{notebook_id}/{endpoint}", body, format="json")
+
+    assert response.status_code == status_code
+    payload = response.json()
+    assert payload["error"]["code"] == error_code
+    assert "OpenAI" in payload["error"]["message"]
+    assert "OpenAI" not in payload["error"]["message"]
+    assert payload["provider"] == "openai"
+    assert payload["model"] == "gpt-5.6-terra-high"
+    assert payload["providerErrorCategory"] == category
+    assert payload["retryAvailable"] is True
+    assert payload["retryAction"] == retry_action
+    recorder.assert_called_once_with("openai", category)
     assert client.get(f"/api/v1/notebooks/{notebook_id}/artifacts").json()["artifacts"] == []
 
 

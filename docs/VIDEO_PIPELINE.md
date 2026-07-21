@@ -9,18 +9,18 @@ incorrect checkpoint
   -> immediate text correction + source-grounded visual
   -> learner chooses guided video
   -> Django validates source IDs and bounded correction fields
-  -> Fireworks slide generator OR protected rendered-video adapter
+  -> OpenAI slide generator OR protected rendered-video adapter
   -> ordered 1-5 minute lesson with segment controls
 ```
 
-## Fireworks slide mode
+## OpenAI slide mode
 
-The default `REMEDIATION_VIDEO_PROVIDER=fireworks-slides` asks the existing
-Fireworks Qwen provider for a typed storyboard containing definition, visual
+The default `REMEDIATION_VIDEO_PROVIDER=openai-slides` asks the existing
+OpenAI OpenAI provider for a typed storyboard containing definition, visual
 model, application, misconception repair, and transfer content. The player
 shows one slide at a time and includes a diagram when the model returned one.
 VoxCPM narration is optional; browser speech is used as a fallback. This mode
-does not claim that Qwen generated an MP4.
+does not claim that OpenAI generated an MP4.
 
 ## OpenMAIC-style rendered mode
 

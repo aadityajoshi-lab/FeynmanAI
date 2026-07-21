@@ -136,18 +136,14 @@ CLERK_AUTHORIZED_PARTIES = [
     ).split(",")
     if origin.strip()
 ]
-LLM_PROVIDER = configured("LLM_PROVIDER", "qwen").lower()
+LLM_PROVIDER = configured("LLM_PROVIDER", "openai").lower()
 OPENAI_MODEL = configured("OPENAI_MODEL", "gpt-5.6-terra-high")
 OPENAI_API_KEY = configured("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = configured("OPENAI_BASE_URL", "")
-FIREWORKS_API_KEY = configured("FIREWORKS_API_KEY", "")
-FIREWORKS_MODEL = configured("FIREWORKS_MODEL", "accounts/fireworks/models/qwen3p7-plus")
-FIREWORKS_BASE_URL = configured("FIREWORKS_BASE_URL", "https://api.fireworks.ai/inference/v1")
 # A complete study module includes source-grounded explanations, visuals, and
-# four assessment stages per topic. Qwen can need more than a minute for that
-# structured response, so allow a longer provider window by default.
-FIREWORKS_TIMEOUT_SECONDS = float(configured("FIREWORKS_TIMEOUT_SECONDS", "240"))
-REMEDIATION_VIDEO_PROVIDER = configured("REMEDIATION_VIDEO_PROVIDER", "fireworks-slides").lower()
+# four assessment stages per topic. Allow a longer structured-response window.
+OPENAI_TIMEOUT_SECONDS = float(configured("OPENAI_TIMEOUT_SECONDS", "240"))
+REMEDIATION_VIDEO_PROVIDER = configured("REMEDIATION_VIDEO_PROVIDER", "openai-slides").lower()
 VIDEO_SERVICE_BASE_URL = configured("VIDEO_SERVICE_BASE_URL", "http://127.0.0.1:3000")
 VIDEO_SERVICE_KEY = configured("VIDEO_SERVICE_KEY", "feynman-local-video")
 VIDEO_SERVICE_TIMEOUT_SECONDS = float(configured("VIDEO_SERVICE_TIMEOUT_SECONDS", "900"))

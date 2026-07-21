@@ -15,13 +15,28 @@ def test_provider_status_does_not_expose_keys(client):
     response = client.get("/api/v1/providers")
     assert response.status_code == 200
     body = response.json()
-    assert {item["id"] for item in body["providers"]} == {"mistral", "qwen", "fireworks", "openai", "fixture"}
-    qwen = next(item for item in body["providers"] if item["id"] == "qwen")
-    assert qwen["label"] == "Qwen (via Fireworks)"
-    fireworks = next(item for item in body["providers"] if item["id"] == "fireworks")
-    assert {"id", "label", "available", "model", "configured", "reachable", "status", "lastErrorCategory", "lastSuccessAt"}.issubset(fireworks)
+    assert {item["id"] for item in body["providers"]} == {"mistral", "openai", "fixture"}
+    openai = next(item for item in body["providers"] if item["id"] == "openai")
+    assert openai["label"] == "OpenAI (via OpenAI)"
+    openai = next(item for item in body["providers"] if item["id"] == "openai")
+    assert {"id", "label", "available", "model", "configured", "reachable", "status", "lastErrorCategory", "lastSuccessAt"}.issubset(openai)
     assert {"ready", "extracting", "failed", "localFallbackActive"}.issubset(body["sourceStatus"])
     assert all("key" not in json.dumps(item).lower() for item in body["providers"])
+
+
+@pytest.mark.django_db
+@override_settings(
+    LLM_PROVIDER="openai",
+    OPENAI_API_KEY="openai-test-key",
+    OPENAI_BASE_URL="http://openai.test/v1",
+    OPENAI_MODEL="cx/gpt-5.6-terra-high",
+)
+def test_provider_status_normalizes_the_openai_model_name(client):
+    response = client.get("/api/v1/providers")
+    assert response.status_code == 200
+    openai = next(item for item in response.json()["providers"] if item["id"] == "openai")
+    assert openai["label"] == "OpenAI (via OpenAI)"
+    assert openai["model"] == "gpt-5.6-terra-high"
 
 
 def test_rich_scene_schema_is_available_for_provider_repairs():
@@ -249,15 +264,15 @@ def test_plan_rejects_browser_supplied_source_text(client):
     assert response.json()["error"]["code"] == "source_boundary_violation"
 
 
-def test_live_fireworks_mode_is_accepted_by_manifest_validator():
+def test_live_openai_mode_is_accepted_by_manifest_validator():
     from teachback.study_plan_views import _validate_manifest
 
     _validate_manifest(
         {
-            "studyPlanId": "plan_qwen3p7",
+            "studyPlanId": "plan_openai3p7",
             "sourceIds": ["upload_source"],
             "chapterSelection": "chapter_1",
-            "providerMode": "live_fireworks",
+            "providerMode": "live_openai",
             "sourcePackVersion": "uploaded-draft-test",
             "recordVersion": 1,
             "outline": [{"sourceAnchorIds": ["candidate_1"]}],
@@ -275,7 +290,7 @@ def test_live_manifest_allows_optional_visualization_and_exam_bridge():
             "studyPlanId": "plan_without_visual",
             "sourceIds": ["upload_source"],
             "chapterSelection": "chapter_1",
-            "providerMode": "live_fireworks",
+            "providerMode": "live_openai",
             "sourcePackVersion": "uploaded-draft-test",
             "recordVersion": 1,
             "outline": [{"sourceAnchorIds": ["candidate_1"]}],
@@ -299,7 +314,7 @@ def test_live_manifest_requires_a_topic_assessment_ladder():
             "studyPlanId": "plan_topic_ladder",
             "sourceIds": ["upload_source"],
             "chapterSelection": "chapter_1",
-            "providerMode": "live_fireworks",
+            "providerMode": "live_openai",
             "sourcePackVersion": "uploaded-draft-test",
             "recordVersion": 1,
             "outline": [{"sourceAnchorIds": ["candidate_1"]}],
@@ -327,7 +342,7 @@ def test_live_manifest_requires_the_ladder_on_every_topic():
                 "studyPlanId": "plan_two_topics",
                 "sourceIds": ["upload_source"],
                 "chapterSelection": "chapter_1",
-                "providerMode": "live_fireworks",
+                "providerMode": "live_openai",
                 "sourcePackVersion": "uploaded-draft-test",
                 "recordVersion": 1,
                 "outline": [{"sourceAnchorIds": ["candidate_1"]}],
@@ -358,7 +373,7 @@ def test_live_manifest_requires_exactly_one_application_stage_in_the_ladder():
                 "studyPlanId": "plan_extra_application",
                 "sourceIds": ["upload_source"],
                 "chapterSelection": "chapter_1",
-                "providerMode": "live_fireworks",
+                "providerMode": "live_openai",
                 "sourcePackVersion": "uploaded-draft-test",
                 "recordVersion": 1,
                 "outline": [{"sourceAnchorIds": ["candidate_1"]}],

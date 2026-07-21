@@ -77,7 +77,7 @@ The secondary dynamic-study path remains available for compatibility:
 - `/study/workspace` and `/subjects` are legacy dynamic-module routes, not the default learner entry.
 - `POST /api/v1/study-sources/ingest` and `POST /api/v1/study-plans` support the legacy source-ingestion/module-builder path.
 
-For that legacy module builder, Fireworks (`accounts/fireworks/models/qwen3p7-plus`) is used when configured. OpenAI is an optional second live provider. The deterministic fixture is retained for automated tests and is not a silent replacement for a failed live response. Provider failures must remain visible to the learner.
+The module builder uses the server-side OpenAI provider when configured. The deterministic fixture is retained for automated tests and is not a silent replacement for a failed live response. Provider failures must remain visible to the learner.
 
 ## Repository layout
 

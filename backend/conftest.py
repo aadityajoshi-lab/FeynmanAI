@@ -1,4 +1,4 @@
-"""Keep the test suite offline and deterministic even when local runtime envs use Fireworks."""
+"""Keep the test suite offline and deterministic even when local runtime envs use OpenAI."""
 
 import pytest
 

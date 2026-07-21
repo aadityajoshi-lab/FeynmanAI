@@ -24,4 +24,11 @@ describe("Notebook notes source scope", () => {
     expect(workspace).toContain("Confirm remove ${source.title}");
     expect(workspace).toContain("onCancelDelete={() => setConfirmingDeleteSource(null)}");
   });
+
+  it("keeps OpenAI provider failures retryable and visible on generated outputs", () => {
+    expect(workspace).toContain("function isRetryableGenerationFailure");
+    expect(workspace).toContain("isRetryableGenerationFailure(failure)");
+    expect(workspace).toContain("OpenAI${normalizedModel");
+    expect(workspace).toContain('replace(/^cx\\//i, "")');
+  });
 });

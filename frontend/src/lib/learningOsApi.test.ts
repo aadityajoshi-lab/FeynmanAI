@@ -131,13 +131,13 @@ describe("Learning OS API contracts", () => {
   it("preserves non-secret provider feedback from an activity attempt", async () => {
     vi.stubGlobal("fetch", fetchMock.mockResolvedValue(jsonResponse({
       evidence: { status: "observed" },
-      feedback: { provider: "fireworks", model: "configured-model", providerAttempt: "failed", retryAvailable: true, retryAction: "resubmit_attempt", sourceAnchorIds: [], uncertainty: "high" },
+      feedback: { provider: "openai", model: "configured-model", providerAttempt: "failed", retryAvailable: true, retryAction: "resubmit_attempt", sourceAnchorIds: [], uncertainty: "high" },
       goal: {},
     })));
 
     const result = await learningOsApi.submitAttempt("goal-1", { activityId: "activity-1", response: "A concrete response that can be evaluated and retried." });
 
-    expect(result.feedback).toMatchObject({ provider: "fireworks", providerAttempt: "failed", retryAvailable: true, retryAction: "resubmit_attempt" });
+    expect(result.feedback).toMatchObject({ provider: "openai", providerAttempt: "failed", retryAvailable: true, retryAction: "resubmit_attempt" });
     expect(result.feedback).not.toHaveProperty("apiKey");
   });
 

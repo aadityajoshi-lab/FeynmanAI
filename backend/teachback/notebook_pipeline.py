@@ -203,7 +203,7 @@ def _enrich_visual_assets_with_diagrams(assets: list[dict], blocks: list[dict]) 
     unavailable so the UI can show the real limitation instead of a fake
     diagram.
     """
-    configured = str(getattr(settings, "LLM_PROVIDER", "") or "").casefold() in {"openai", "live_openai", "qwen", "live_qwen", "fireworks", "live_fireworks"}
+    configured = str(getattr(settings, "LLM_PROVIDER", "") or "").casefold() in {"openai", "live_openai"}
     if not configured or not active_generation_configured():
         return {"diagramExtraction": "not_configured", "diagramCount": 0}
     candidates = [asset for asset in assets if isinstance(asset, dict) and isinstance(asset.get("dataUrl"), str) and asset.get("dataUrl", "").startswith("data:image/")]

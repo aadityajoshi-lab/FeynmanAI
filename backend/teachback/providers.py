@@ -24,15 +24,14 @@ class ProviderOutputError(ValueError):
 
 
 def normalize_model_name(value: object, fallback: str = "") -> str:
-    """Remove OmniRoute's UI-only ``cx/`` namespace before using a model ID."""
+    """Remove OpenAI gateway's UI-only ``cx/`` namespace before using a model ID."""
     model = str(value or fallback).strip()
     return re.sub(r"^cx/", "", model, flags=re.IGNORECASE)
 
 
 _PROVIDER_RUNTIME_LOCK = Lock()
 _PROVIDER_RUNTIME: dict[str, dict[str, str | None]] = {
-    "fireworks": {"lastSuccessAt": None, "lastErrorCategory": None},
-    "qwen": {"lastSuccessAt": None, "lastErrorCategory": None},
+    "openai": {"lastSuccessAt": None, "lastErrorCategory": None},
     "mistral": {"lastSuccessAt": None, "lastErrorCategory": None},
 }
 
@@ -80,18 +79,18 @@ def load_provider_json(raw: str) -> dict:
 def _require_top_level_fields(payload: object, schema: dict) -> dict:
     """Reject syntactically valid provider JSON that omitted its contract."""
     if not isinstance(payload, dict):
-        raise ProviderOutputError("Fireworks returned a non-object structured response")
+        raise ProviderOutputError("OpenAICompatible returned a non-object structured response")
     required = [str(field) for field in schema.get("required", []) if str(field)]
     missing = [field for field in required if field not in payload]
     if missing:
         raise ProviderOutputError(
-            "Fireworks omitted required structured fields: " + ", ".join(missing[:8])
+            "OpenAICompatible omitted required structured fields: " + ", ".join(missing[:8])
         )
     return payload
 
 
-def _fireworks_json_schema_format(schema_name: str, schema: dict) -> dict:
-    """Create Fireworks' OpenAI-compatible schema response format."""
+def _OpenAICompatible_json_schema_format(schema_name: str, schema: dict) -> dict:
+    """Create OpenAICompatible' OpenAI-compatible schema response format."""
     safe_name = re.sub(r"[^a-zA-Z0-9_-]", "_", schema_name)[:64] or "feynman_response"
     return {
         "type": "json_schema",
@@ -103,7 +102,7 @@ def _fireworks_json_schema_format(schema_name: str, schema: dict) -> dict:
 
 
 def _is_schema_format_rejection(exc: Exception) -> bool:
-    """Whether one legacy Fireworks model rejected only the schema envelope."""
+    """Whether one legacy OpenAICompatible model rejected only the schema envelope."""
     if getattr(exc, "status_code", None) not in {400, 422}:
         return False
     detail = str(exc).lower()
@@ -287,7 +286,7 @@ def _best_supported_option(stage: dict, source_text: str) -> str | None:
 def normalize_checkpoint_feedback(result: dict, manifest: dict, learner_response: str) -> dict:
     """Make a degraded evaluator response useful instead of showing `T`/`R`.
 
-    Fireworks can occasionally satisfy a loose JSON schema with single-letter
+    OpenAICompatible can occasionally satisfy a loose JSON schema with single-letter
     placeholders. The learner should receive a complete, honest repair guide,
     never raw provider fragments. This does not alter a normal, substantive
     evaluation.
@@ -305,7 +304,7 @@ def normalize_checkpoint_feedback(result: dict, manifest: dict, learner_response
     if not _usable_feedback(result.get("mistake")):
         result["mistake"] = f"The response did not clearly address the exact question: {prompt[:220]}"
         if response_label and len(response_label) >= 8:
-            result["mistake"] = f"You selected or entered “{response_label}”, but the response did not match the complete idea required by this check."
+            result["mistake"] = f"You selected or entered â€œ{response_label}â€, but the response did not match the complete idea required by this check."
     if not _usable_feedback(result.get("correctAnswer")):
         if supported_option:
             result["correctAnswer"] = f"{supported_option}"
@@ -313,15 +312,15 @@ def normalize_checkpoint_feedback(result: dict, manifest: dict, learner_response
             result["correctAnswer"] = f"Answer the question using the topic definition: {prompt[:260]}"
     if not _usable_feedback(result.get("correction")):
         if supported_option:
-            result["correction"] = f"For this question, the best-supported option is “{supported_option}”. Compare that statement with the source explanation and trace the role it describes in the diagram."
+            result["correction"] = f"For this question, the best-supported option is â€œ{supported_option}â€. Compare that statement with the source explanation and trace the role it describes in the diagram."
         elif source_text:
             result["correction"] = f"Reread the source explanation and connect it to the question. The relevant idea is: {source_text[:700]}"
         else:
             result["correction"] = "Reread the definition, name the key relationship, and apply it to the exact situation in the question before retrying."
     if not _usable_feedback(result.get("remediation")):
-        result["remediation"] = f"Review the definition and visual for “{prompt[:220]}”, then explain why your next answer fits the topic."
+        result["remediation"] = f"Review the definition and visual for â€œ{prompt[:220]}â€, then explain why your next answer fits the topic."
     if not result.get("retryPrompt") or not _usable_feedback(result.get("retryPrompt"), minimum=12):
-        result["retryPrompt"] = f"Try a similar check: which statement best answers the same idea tested by “{prompt[:180]}”?"
+        result["retryPrompt"] = f"Try a similar check: which statement best answers the same idea tested by â€œ{prompt[:180]}â€?"
     if kind == "mcq" and len(normalize_answer_options(result.get("retryOptions")) or []) < 3:
         options = normalize_answer_options(stage.get("options") or stage.get("choices"))
         result["retryOptions"] = options if options and len(options) >= 3 else None
@@ -332,7 +331,7 @@ def normalize_checkpoint_feedback(result: dict, manifest: dict, learner_response
 def study_plan_schema(request: StudyPlanRequest) -> dict:
     """Rich scene schema used when repairing incomplete live manifests.
 
-    The initial provider call stays shallow for Qwen reliability; a targeted
+    The initial provider call stays shallow for OpenAI reliability; a targeted
     repair must still require instructional content and renderable scene data.
     """
     allowed_anchor_ids = list(request.approved_source_ids)
@@ -350,7 +349,7 @@ def study_plan_schema(request: StudyPlanRequest) -> dict:
     }
 
     # Rich scene contract used for targeted repair fragments. The initial
-    # top-level request intentionally uses the shallower Qwen schema below,
+    # top-level request intentionally uses the shallower OpenAI schema below,
     # while repairs must require actual instructional and visual fields.
     action_schema = {
         "type": "object",
@@ -408,11 +407,11 @@ def study_plan_schema(request: StudyPlanRequest) -> dict:
 
 
 def compact_study_plan_schema(request: StudyPlanRequest) -> dict:
-    """Small, complete first-manifest contract for live Qwen generation.
+    """Small, complete first-manifest contract for live OpenAI generation.
 
     The initial authoring request deliberately has a much smaller completion
     surface than a full course export.  A large PDF plus unbounded scenes,
-    actions, and chart data made Qwen stream a partial JSON object before the
+    actions, and chart data made OpenAI stream a partial JSON object before the
     server could validate it.  The learner still receives a real, model-authored
     four-step learning loop; optional visuals and exam practice are callable
     extensions after the module opens.
@@ -534,11 +533,11 @@ def learner_stage_prompt(raw_prompt: Any, kind: str, topic_label: str) -> str:
     return prompts.get(kind, f"Explain {topic} and show how you would apply it.")
 
 
-def fireworks_recovery_manifest_schema(request: StudyPlanRequest) -> dict:
-    """Small recovery contract for Qwen JSON mode.
+def OpenAICompatible_recovery_manifest_schema(request: StudyPlanRequest) -> dict:
+    """Small recovery contract for OpenAI JSON mode.
 
     The full manifest contract is used for validation and repair, but putting
-    every nested constraint into a Qwen prompt can produce an empty object.
+    every nested constraint into a OpenAI prompt can produce an empty object.
     This shape keeps the learner-facing fields explicit without repeating all
     production limits.
     """
@@ -583,7 +582,7 @@ def fireworks_recovery_manifest_schema(request: StudyPlanRequest) -> dict:
     }
 
 
-def fireworks_recovery_topic_schema() -> dict:
+def OpenAICompatible_recovery_topic_schema() -> dict:
     """Small scene-only contract used when a full manifest is too ambitious."""
     stage_schema = {
         "type": "object",
@@ -825,7 +824,7 @@ def module_chat_schema(request: ModuleChatRequest) -> dict:
                 "required": ["kind", "sceneId", "modeId", "reason"],
                 "properties": {
                     "kind": {"type": "string", "enum": CHAT_ACTION_TYPES},
-                    # Fireworks/Qwen accepts nullable types but rejects an enum
+                    # OpenAICompatible/OpenAI accepts nullable types but rejects an enum
                     # containing JSON null. Django validates scene and mode IDs
                     # against the request after parsing.
                     "sceneId": {"type": ["string", "null"]},
@@ -1312,7 +1311,7 @@ class OpenAIProvider(LLMProvider):
 
 
 def _notebook_artifact_schema(artifact_type: str, allowed_anchors: list[str]) -> dict:
-    """Return the compact, typed Fireworks contract for one notebook output.
+    """Return the compact, typed provider-neutral contract for one notebook output.
 
     The server owns source IDs and validates every returned anchor again after
     parsing.  Keeping the model contract per artifact type avoids asking it to
@@ -1366,7 +1365,21 @@ def _notebook_artifact_schema(artifact_type: str, allowed_anchors: list[str]) ->
                 "teachingNote": {"type": "string", "maxLength": 240},
                 "visualKind": {"type": "string", "enum": ["text-note", "source-figure", "teaching-diagram"]},
                 "assetIds": {"type": "array", "maxItems": 3, "items": {"type": "string"}},
-                "diagram": {"type": "object"},
+                "diagram": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["nodes", "edges"],
+                    "properties": {
+                        "nodes": {"type": "array", "maxItems": 8, "items": {"type": "object", "additionalProperties": False, "required": ["id", "label"], "properties": {
+                            "id": {"type": "string", "minLength": 1, "maxLength": 40},
+                            "label": {"type": "string", "minLength": 1, "maxLength": 100},
+                        }}},
+                        "edges": {"type": "array", "maxItems": 12, "items": {"type": "object", "additionalProperties": False, "required": ["from", "to"], "properties": {
+                            "from": {"type": "string", "minLength": 1, "maxLength": 40},
+                            "to": {"type": "string", "minLength": 1, "maxLength": 40},
+                        }}},
+                    },
+                },
                 "sourceAnchorIds": anchor_field,
             }},
         }
@@ -1428,41 +1441,58 @@ def _notebook_artifact_schema(artifact_type: str, allowed_anchors: list[str]) ->
         }
     else:
         raise ProviderOutputError("unsupported notebook artifact type")
+    # OpenAI gateway's OpenAI Responses implementation enforces the strict JSON
+    # Schema rule that every property of an object must appear in ``required``.
+    # The same fully explicit contract is accepted by OpenAICompatible and prevents a
+    # schema rejection from silently sending notebook tools down the fallback.
+    def require_declared_properties(value: object) -> None:
+        if isinstance(value, dict):
+            properties = value.get("properties")
+            if isinstance(properties, dict):
+                existing = [str(item) for item in value.get("required") or []]
+                value["required"] = list(dict.fromkeys([*existing, *properties]))
+            for nested in value.values():
+                require_declared_properties(nested)
+        elif isinstance(value, list):
+            for nested in value:
+                require_declared_properties(nested)
+
+    require_declared_properties(top)
     return top
 
 
-class FireworksProvider(LLMProvider):
-    """OpenAI-compatible Fireworks provider for real module generation."""
+class OpenAICompatibleProvider(LLMProvider):
+    """OpenAI-compatible OpenAICompatible provider for real module generation."""
 
-    mode = "live_fireworks"
+    mode = "live_openai"
     model = ""
-    provider_id = "fireworks"
+    provider_id = "openai"
 
     def __init__(self) -> None:
-        if not settings.FIREWORKS_API_KEY:
-            raise ProviderUnavailable("FIREWORKS_API_KEY is not configured")
+        if not settings.OPENAI_API_KEY:
+            raise ProviderUnavailable("OPENAI_API_KEY is not configured")
         try:
             from openai import OpenAI
         except ImportError as exc:  # pragma: no cover - environment-specific
             raise ProviderUnavailable("openai package is not installed") from exc
         self.client = OpenAI(
-            api_key=settings.FIREWORKS_API_KEY,
-            base_url=settings.FIREWORKS_BASE_URL,
-            timeout=settings.FIREWORKS_TIMEOUT_SECONDS,
+            api_key=settings.OPENAI_API_KEY,
+            base_url=settings.OPENAI_BASE_URL,
+            timeout=settings.OPENAI_TIMEOUT_SECONDS,
             # The API view owns the retry/abstention boundary. Disable the SDK
             # retry multiplier so a transient provider stall cannot block the
             # Django worker for several timeout windows.
             max_retries=0,
         )
-        self.model = settings.FIREWORKS_MODEL
-        self.provider_id = "fireworks"
+        self.model = settings.OPENAI_MODEL
+        self.provider_id = "openai"
 
     def health(self) -> dict:
         return {
             "providerMode": self.mode,
-            "available": bool(settings.FIREWORKS_API_KEY),
+            "available": bool(settings.OPENAI_API_KEY),
             "model": self.model,
-            "baseUrl": settings.FIREWORKS_BASE_URL,
+            "baseUrl": settings.OPENAI_BASE_URL,
             "schemaVersion": "contracts/v3",
         }
 
@@ -1482,7 +1512,7 @@ class FireworksProvider(LLMProvider):
         allowed = [span.get("spanId") for span in request.source_spans if span.get("spanId")]
         result = self._chat_json(f"Answer this learner question only from the supplied source spans. Claim: {request.claim}. Question: {request.question}. Allowed anchors: {allowed}.", "clarification_v3", schema)
         if not set(result.get("sourceAnchorIds", [])).issubset(set(allowed)):
-            raise ProviderOutputError("Fireworks returned an unapproved clarification anchor")
+            raise ProviderOutputError("OpenAICompatible returned an unapproved clarification anchor")
         result["providerMode"] = self.mode
         return result
 
@@ -1549,7 +1579,7 @@ class FireworksProvider(LLMProvider):
         result = self._chat_json(instruction, "module_chat_v3", schema)
         allowed = set(request.approved_source_ids)
         if not set(result.get("sourceAnchorIds", [])).issubset(allowed):
-            raise ProviderOutputError("Fireworks returned an unapproved chat source anchor")
+            raise ProviderOutputError("OpenAICompatible returned an unapproved chat source anchor")
         action = result.get("action") if isinstance(result.get("action"), dict) else {}
         action_kind = str(action.get("kind") or "none")
         if action_kind == "show_visualization":
@@ -1563,7 +1593,7 @@ class FireworksProvider(LLMProvider):
         last_error: Exception | None = None
         # Keep a compact human-readable shape in the prompt as a helpful
         # fallback for legacy model aliases. The API schema below is the
-        # primary contract: plain json_object mode allowed Qwen to return a
+        # primary contract: plain json_object mode allowed OpenAI to return a
         # valid-but-empty object after spending its tokens on reasoning.
         def schema_shape(value: object, depth: int = 0) -> object:
             if depth > 4 or not isinstance(value, dict):
@@ -1593,7 +1623,7 @@ class FireworksProvider(LLMProvider):
             if schema_name.startswith("study_")
             else f"matching this required field shape ({schema_name}): {compact_shape}."
         )
-        response_format = _fireworks_json_schema_format(schema_name, schema)
+        response_format = _OpenAICompatible_json_schema_format(schema_name, schema)
         fell_back_to_json_object = False
         for attempt in range(2):
             try:
@@ -1623,7 +1653,7 @@ class FireworksProvider(LLMProvider):
                     # whiteboard actions, visualization config, and four
                     # checkpoints. Keep enough completion budget for the
                     # manifest instead of silently truncating it mid-object.
-                    # Qwen3 P7 Plus can return an empty JSON object when the
+                    # OpenAI3 P7 Plus can return an empty JSON object when the
                     # requested completion ceiling is set above its practical
                     # structured-output window. Keep enough room for a rich
                     # scene while staying inside that reliable window.
@@ -1641,8 +1671,8 @@ class FireworksProvider(LLMProvider):
                 if isinstance(message, list):
                     message = "".join(str(item.get("text", "")) if isinstance(item, dict) else str(item) for item in message)
                 if not message:
-                    raise ProviderOutputError("Fireworks returned no structured output")
-                # Qwen occasionally emits literal newlines inside long string
+                    raise ProviderOutputError("OpenAICompatible returned no structured output")
+                # OpenAI occasionally emits literal newlines inside long string
                 # fields despite JSON-schema mode. Permit control characters;
                 # the typed manifest and source validators remain authoritative.
                 parsed = _require_top_level_fields(load_provider_json(message), schema)
@@ -1658,7 +1688,7 @@ class FireworksProvider(LLMProvider):
                     is_manifest = schema_name.startswith("study_manifest")
                     if isinstance(repaired, dict) and repaired and (not is_manifest or isinstance(repaired.get("scenes"), list)):
                         repaired = _require_top_level_fields(repaired, schema)
-                        record_provider_success("fireworks")
+                        record_provider_success("openai")
                         return repaired
                 except Exception:
                     pass
@@ -1666,7 +1696,7 @@ class FireworksProvider(LLMProvider):
                 if attempt == 0:
                     continue
             except Exception as exc:
-                # Older Fireworks model aliases may reject the schema envelope
+                # Older OpenAICompatible model aliases may reject the schema envelope
                 # itself. Fall back once to JSON object mode, while retaining
                 # the top-level contract check so an empty {} never succeeds.
                 if not fell_back_to_json_object and _is_schema_format_rejection(exc):
@@ -1778,7 +1808,7 @@ class FireworksProvider(LLMProvider):
             f"Past-question source IDs: {request.past_question_source_ids or []}. If past-question sources are present, return up to six concise patterns in pastQuestionAnalysis and make application stages reflect those patterns; otherwise return an empty list. "
             f"Source candidates (candidate text is not automatically approved evidence): {source_context}"
         )
-        # The Fireworks/Qwen path uses the bounded authoring request below as
+        # The OpenAICompatible/OpenAI path uses the bounded authoring request below as
         # its primary generation path. A full rich-manifest request can spend
         # the provider timeout before the learner sees the first topic; the
         # server enriches and validates this compact manifest afterward.
@@ -1804,7 +1834,7 @@ class FireworksProvider(LLMProvider):
                 "study_manifest_v3_retry",
                 {"type": "object"},
             )
-        # In plain-language JSON mode Qwen may return a useful topic under a
+        # In plain-language JSON mode OpenAI may return a useful topic under a
         # compact `topicScene` envelope instead of the requested top-level
         # manifest. Re-wrap that model-authored content; do not invent lesson
         # facts or source evidence while restoring the server contract.
@@ -1836,7 +1866,7 @@ class FireworksProvider(LLMProvider):
                 topic.setdefault("conceptId", str(topic.get("sceneId") or "topic-1"))
                 topic_anchors = list(topic.get("sourceAnchorIds") or [])
                 raw_result = {
-                    "studyPlanId": str(raw_result.get("studyPlanId") or "plan-live-fireworks"),
+                    "studyPlanId": str(raw_result.get("studyPlanId") or "plan-live-OpenAICompatible"),
                     "sourceIds": raw_result.get("sourceIds") or request.source_ids,
                     "chapterSelection": raw_result.get("chapterSelection") or request.chapter_selection,
                     "sourcePackVersion": str(raw_result.get("sourcePackVersion") or "draft"),
@@ -1922,7 +1952,7 @@ class FireworksProvider(LLMProvider):
                     if not repaired_scenes:
                         continue
                     repaired_scene = repaired_scenes[0]
-                    repaired_scene["title"] = f"{label} - {str(repaired_scene.get('title') or 'Source section').removeprefix(label).lstrip(' ·-:')}"
+                    repaired_scene["title"] = f"{label} - {str(repaired_scene.get('title') or 'Source section').removeprefix(label).lstrip(' Â·-:')}"
                     repaired_anchors = list(repaired_scene.get("sourceAnchorIds") or [])
                     if not repaired_anchors and section.get("candidateId"):
                         repaired_anchors = [str(section["candidateId"])]
@@ -1942,7 +1972,7 @@ class FireworksProvider(LLMProvider):
                 raise ProviderOutputError(f"source sections are missing from the generated module: {', '.join(still_missing)}")
         missing = missing_required_scene_types(result)
         if missing and any(scene.get("stages") for scene in result.get("scenes", []) if isinstance(scene, dict)):
-            # Qwen can satisfy the top-level manifest schema while dropping one
+            # OpenAI can satisfy the top-level manifest schema while dropping one
             # or more stages from a topic. Repair those small omissions with
             # stage-only requests instead of discarding an otherwise usable
             # module.
@@ -2054,7 +2084,7 @@ class FireworksProvider(LLMProvider):
                         options = normalize_answer_options(repaired_stage.get("options") or repaired_stage.get("choices"))
                         raw_prompt = repaired_stage.get("prompt") or repaired_stage.get("stem") or repaired_stage.get("question")
                         if missing_kind == "mcq":
-                            # Qwen sometimes returns option records even when
+                            # OpenAI sometimes returns option records even when
                             # the schema asks for strings, and may omit the
                             # structural enum fields. The option text is still
                             # usable, so normalize it and repair only metadata
@@ -2086,7 +2116,7 @@ class FireworksProvider(LLMProvider):
                 raise ProviderOutputError(f"live study module is missing assessment stages: {', '.join(missing)}")
         if missing:
             # Repair fragments use the rich scene contract rather than the
-            # intentionally shallow top-level Qwen schema. This keeps a
+            # intentionally shallow top-level OpenAI schema. This keeps a
             # missing visualization from being silently returned as a title
             # with no renderable model-authored configuration.
             scene_schema = study_plan_schema(request)["properties"]["scenes"]["items"]
@@ -2131,7 +2161,7 @@ class FireworksProvider(LLMProvider):
                         elif target_type in {"predict_checkpoint", "retrieval", "teach_back", "exam_bridge"} and (
                             fragment_scene.get("actions") or fragment_scene.get("explanation") or fragment_scene.get("checkpoint")
                         ):
-                            # Qwen can occasionally ignore the enum in a repair
+                            # OpenAI can occasionally ignore the enum in a repair
                             # fragment even though it returned all of the fields
                             # needed for an interactive scene. The requested type
                             # is structural metadata; coercing it here lets the
@@ -2151,15 +2181,15 @@ class FireworksProvider(LLMProvider):
             for anchor in item.get("sourceAnchorIds", [])
         }
         if not returned_ids.issubset(set(request.source_ids)):
-            raise ProviderOutputError("Fireworks returned an unrequested source ID")
+            raise ProviderOutputError("OpenAICompatible returned an unrequested source ID")
         if not returned_anchors.issubset(set(allowed_anchor_ids)):
-            raise ProviderOutputError("Fireworks returned an unapproved source anchor")
+            raise ProviderOutputError("OpenAICompatible returned an unapproved source anchor")
         result["providerMode"] = self.mode
         return result
 
 
     def generate_remediation_slides(self, request: dict) -> dict:
-        """Create a source-grounded slide storyboard with the Qwen Fireworks key."""
+        """Create a source-grounded slide storyboard with the OpenAI API."""
         schema = {
             "type": "object",
             "additionalProperties": False,
@@ -2357,41 +2387,20 @@ class FireworksProvider(LLMProvider):
         result = self._chat_json(instruction, "openmaic_notebook_lesson_v1", schema)
         # A structured response that cannot produce a complete lesson is a
         # provider failure, not permission to substitute a local slide deck and
-        # label it as Fireworks. The API returns a recoverable error so the
+        # label it as OpenAICompatible. The API returns a recoverable error so the
         # learner can retry the configured provider explicitly.
         if not isinstance(result.get("slides"), list) or not 4 <= len(result["slides"]) <= 8:
-            raise ProviderOutputError("Fireworks returned an incomplete narrated lesson")
+            raise ProviderOutputError("OpenAICompatible returned an incomplete narrated lesson")
         result["providerMode"] = self.mode
         return result
 
 
-class QwenProvider(FireworksProvider):
-    """Qwen through the configured OpenAI-compatible Fireworks transport.
-
-    The model provenance remains Qwen even though requests use the transport's
-    compatible SDK. This avoids implying that an OpenAI API key or the OpenAI
-    service was used for the learner-facing result.
-    """
-
-    mode = "live_qwen"
-    provider_id = "qwen"
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.provider_id = "qwen"
-
-    def health(self) -> dict:
-        result = super().health()
-        result.update({"provider": "qwen", "transport": "fireworks"})
-        return result
-
-
-class OpenAIProvider(FireworksProvider):
+class OpenAIProvider(OpenAICompatibleProvider):
     """OpenAI Responses API-compatible adapter for GPT-5.6 model family.
 
     The structured provider contracts stay shared with the existing
     OpenAI-compatible implementation. Requests may use the first-party API or
-    an OpenAI-compatible proxy such as OmniRoute via ``OPENAI_BASE_URL``.
+    an OpenAI-compatible proxy such as OpenAI gateway via ``OPENAI_BASE_URL``.
     Codex desktop authentication is not used here: this server requires its
     own configured bearer key.
     """
@@ -2417,7 +2426,7 @@ class OpenAIProvider(FireworksProvider):
             "providerMode": self.mode,
             "available": bool(settings.OPENAI_API_KEY),
             "model": self.model,
-            "transport": "omniroute" if getattr(settings, "OPENAI_BASE_URL", "") else "openai",
+            "transport": "OpenAI gateway" if getattr(settings, "OPENAI_BASE_URL", "") else "openai",
             "baseUrl": getattr(settings, "OPENAI_BASE_URL", "") or None,
             "schemaVersion": "contracts/v3",
         }
@@ -2444,11 +2453,7 @@ class OpenAIProvider(FireworksProvider):
                 raise ProviderOutputError("OpenAI returned no structured output")
             parsed = _require_top_level_fields(load_provider_json(raw), schema)
             record_provider_success(self.provider_id)
-            # A later successful OmniRoute request should clear the fallback
-            # marker so provider provenance reflects the request that actually
-            # produced the result.
             self.mode = "live_openai"
-            self.fallback_model = None
             return parsed
         except ProviderOutputError:
             record_provider_failure(self.provider_id, "model_response_invalid")
@@ -2456,26 +2461,6 @@ class OpenAIProvider(FireworksProvider):
         except Exception as exc:
             detail = str(exc).strip() or exc.__class__.__name__
             record_provider_failure(self.provider_id, "unavailable")
-            if getattr(settings, "FIREWORKS_API_KEY", ""):
-                try:
-                    # Use a fresh Fireworks client for this request. This keeps
-                    # OmniRoute failures isolated and lets all inherited
-                    # structured-provider methods fail over consistently.
-                    fallback = FireworksProvider()
-                    result = fallback._chat_json(
-                        instruction,
-                        schema_name,
-                        schema,
-                        attachment=attachment,
-                    )
-                except Exception as fallback_exc:
-                    fallback_detail = str(fallback_exc).strip() or fallback_exc.__class__.__name__
-                    raise ProviderUnavailable(
-                        f"OpenAI request failed: {detail}; Fireworks fallback failed: {fallback_detail}"
-                    ) from fallback_exc
-                self.mode = "live_fireworks_fallback"
-                self.fallback_model = fallback.model
-                return result
             raise ProviderUnavailable(f"OpenAI request failed: {detail}") from exc
 
     def extract_diagram(self, *, image_data_url: str, page: int | None = None) -> dict:
@@ -2504,56 +2489,18 @@ class OpenAIProvider(FireworksProvider):
         return result
 
 
-def fireworks_generation_configured() -> bool:
-    """Whether notebook generation is explicitly configured to use Fireworks.
-
-    A key alone is not enough to override the deterministic fixture mode used
-    by tests and local development. Production must opt in with both a server-
-    side key and ``LLM_PROVIDER=fireworks`` (or its live aliases).
-    """
-    configured = str(getattr(settings, "LLM_PROVIDER", "") or "").strip().casefold()
-    return bool(getattr(settings, "FIREWORKS_API_KEY", "")) and configured in {"fireworks", "live_fireworks"}
-
-
-def qwen_generation_configured() -> bool:
-    """Whether the configured Qwen model has its server-side transport key."""
-    configured = str(getattr(settings, "LLM_PROVIDER", "") or "").strip().casefold()
-    return bool(getattr(settings, "FIREWORKS_API_KEY", "")) and configured in {"qwen", "live_qwen"}
-
-
 def openai_generation_configured() -> bool:
     configured = str(getattr(settings, "LLM_PROVIDER", "") or "").strip().casefold()
-    # Fireworks is the configured failover transport for OmniRoute/OpenAI.
-    return bool(getattr(settings, "OPENAI_API_KEY", "") or getattr(settings, "FIREWORKS_API_KEY", "")) and configured in {"openai", "live_openai"}
+    return bool(getattr(settings, "OPENAI_API_KEY", "")) and configured in {"openai", "live_openai"}
 
 
 def active_generation_configured() -> bool:
     configured = str(getattr(settings, "LLM_PROVIDER", "") or "").strip().casefold()
-    if configured in {"qwen", "live_qwen"}:
-        return qwen_generation_configured()
-    if configured in {"openai", "live_openai"}:
-        return openai_generation_configured()
-    if configured in {"fireworks", "live_fireworks"}:
-        return fireworks_generation_configured()
-    # Keep older tests and local integrations that inject a provider object
-    # while leaving LLM_PROVIDER at fixture mode compatible. The default
-    # fixture environment has neither key, so it remains deterministic.
-    return bool(getattr(settings, "OPENAI_API_KEY", "") or getattr(settings, "FIREWORKS_API_KEY", ""))
+    return configured in {"openai", "live_openai"} and openai_generation_configured()
 
 
 def provider_for(mode: str | None = None) -> LLMProvider:
     configured = (mode or settings.LLM_PROVIDER or "fixture").lower()
-    if configured in {"qwen", "live_qwen"}:
-        return QwenProvider()
-    if configured in {"fireworks", "live_fireworks"}:
-        return FireworksProvider()
     if configured in {"openai", "live_openai"}:
-        try:
-            return OpenAIProvider()
-        except ProviderUnavailable:
-            # A missing/broken OmniRoute client should not take the learner
-            # surface down when the configured Fireworks transport is ready.
-            if getattr(settings, "FIREWORKS_API_KEY", ""):
-                return FireworksProvider()
-            raise
+        return OpenAIProvider()
     return FixtureProvider()

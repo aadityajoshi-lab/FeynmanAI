@@ -34,6 +34,8 @@ from .notebook_media import (
     generate_notebook_artifact,
     generate_openmaic_lesson,
     notebook_provider_error_category,
+    notebook_provider_label,
+    notebook_provider_metadata,
 )
 from .notebook_pipeline import (
     NotebookExtractionError,
@@ -699,13 +701,16 @@ class NotebookArtifactView(APIView):
             pack, selected_source_ids = _scoped_pack(notebook, request.data)
             title, payload = generate_notebook_artifact(pack, artifact_type)
         except ProviderUnavailable as exc:
-            record_provider_failure("fireworks", notebook_provider_error_category(exc))
+            provider, model = notebook_provider_metadata()
+            provider_label = notebook_provider_label()
+            record_provider_failure(provider, notebook_provider_error_category(exc))
             return _error(
-                "The configured Fireworks provider is unavailable. No local artifact was created; retry when the provider is ready.",
+                f"The configured {provider_label} provider is unavailable. No local artifact was created; retry when the provider is ready.",
                 "provider_unavailable",
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 extra={
-                    "provider": "fireworks",
+                    "provider": provider,
+                    "model": model or None,
                     "providerStatus": "unavailable",
                     "providerErrorCategory": notebook_provider_error_category(exc),
                     "retryAvailable": True,
@@ -713,13 +718,16 @@ class NotebookArtifactView(APIView):
                 },
             )
         except ProviderOutputError as exc:
-            record_provider_failure("fireworks", notebook_provider_error_category(exc))
+            provider, model = notebook_provider_metadata()
+            provider_label = notebook_provider_label()
+            record_provider_failure(provider, notebook_provider_error_category(exc))
             return _error(
-                "Fireworks returned an invalid source-grounded artifact. No artifact was saved; retry the provider.",
+                f"The configured {provider_label} provider returned an invalid source-grounded artifact. No artifact was saved; retry the provider.",
                 "artifact_generation_failed",
                 status.HTTP_502_BAD_GATEWAY,
                 extra={
-                    "provider": "fireworks",
+                    "provider": provider,
+                    "model": model or None,
                     "providerStatus": "invalid_response",
                     "providerErrorCategory": notebook_provider_error_category(exc),
                     "retryAvailable": True,
@@ -915,13 +923,16 @@ class NotebookLessonView(APIView):
             pack, selected_source_ids = _scoped_pack(notebook, body)
             payload = generate_openmaic_lesson(pack, question, allow_web_search=False, requested_duration=duration)
         except ProviderUnavailable as exc:
-            record_provider_failure("fireworks", notebook_provider_error_category(exc))
+            provider, model = notebook_provider_metadata()
+            provider_label = notebook_provider_label()
+            record_provider_failure(provider, notebook_provider_error_category(exc))
             return _error(
-                "The configured Fireworks provider is unavailable. No local narrated lesson was created; retry when the provider is ready.",
+                f"The configured {provider_label} provider is unavailable. No local narrated lesson was created; retry when the provider is ready.",
                 "provider_unavailable",
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 extra={
-                    "provider": "fireworks",
+                    "provider": provider,
+                    "model": model or None,
                     "providerStatus": "unavailable",
                     "providerErrorCategory": notebook_provider_error_category(exc),
                     "retryAvailable": True,
@@ -929,13 +940,16 @@ class NotebookLessonView(APIView):
                 },
             )
         except ProviderOutputError as exc:
-            record_provider_failure("fireworks", notebook_provider_error_category(exc))
+            provider, model = notebook_provider_metadata()
+            provider_label = notebook_provider_label()
+            record_provider_failure(provider, notebook_provider_error_category(exc))
             return _error(
-                "Fireworks returned an invalid source-grounded narrated lesson. No lesson was saved; retry the provider.",
+                f"The configured {provider_label} provider returned an invalid source-grounded narrated lesson. No lesson was saved; retry the provider.",
                 "lesson_generation_failed",
                 status.HTTP_502_BAD_GATEWAY,
                 extra={
-                    "provider": "fireworks",
+                    "provider": provider,
+                    "model": model or None,
                     "providerStatus": "invalid_response",
                     "providerErrorCategory": notebook_provider_error_category(exc),
                     "retryAvailable": True,

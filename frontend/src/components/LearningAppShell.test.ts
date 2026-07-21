@@ -29,6 +29,12 @@ describe("LearningAppShell mobile navigation", () => {
     expect(styles).toContain(".fos-mobile-action");
   });
 
+  it("lets the three-column practice desk reclaim the app-frame gutters", () => {
+    expect(shell).toContain('wide ? "fos-main-wide" : ""');
+    expect(styles).toContain(".fos-main-wide");
+    expect(styles).toContain("max-width: none;");
+  });
+
   it("exposes a real sign-out action for the authenticated workspace", () => {
     expect(shell).toContain('aria-label="Sign out"');
     expect(shell).toContain("signOutCurrentAuth");

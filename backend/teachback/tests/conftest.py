@@ -12,7 +12,7 @@ import pytest
 @pytest.fixture(autouse=True)
 def disable_live_provider_credentials(settings):
     settings.LLM_PROVIDER = "fixture"
-    settings.FIREWORKS_API_KEY = ""
+    settings.OPENAI_API_KEY = ""
     settings.OPENAI_API_KEY = ""
     settings.MISTRAL_API_KEY = ""
 
